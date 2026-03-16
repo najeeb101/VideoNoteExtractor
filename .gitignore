@@ -1,0 +1,16 @@
+# Never upload your API keys!
+.env
+
+# Python byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Transcripts and audio files (they get large, no need to upload them to GitHub)
+audio.mp3
+audio.webm
+transcript*.txt
+*.md
+
+# Keep the README!
+!README.md
