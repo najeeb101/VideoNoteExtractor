@@ -1,6 +1,6 @@
 """
 Step 3 - Video Note Extractor
-Accepts a timestamped transcript file, sends it to Google Gemini,
+Accepts a timestamped transcript file, sends it to OpenAI,
 and generates structured Markdown study notes.
 """
 
@@ -8,16 +8,16 @@ import sys
 import os
 
 try:
-    from google import genai
+    from openai import OpenAI
 except ImportError:
-    print("Error: google-genai package not found.")
-    print("Install it with: py -m pip install google-genai")
+    print("Error: openai package not found.")
+    print("Install it with: py -m pip install openai")
     sys.exit(1)
 
 
 def extract_notes(transcript_path: str, output_path: str = "notes.md"):
     """
-    Sends the transcript to Gemini to generate structured notes.
+    Sends the transcript to OpenAI to generate structured notes.
     """
     if not os.path.exists(transcript_path):
         raise FileNotFoundError(f"Transcript file not found: {transcript_path}")
@@ -29,21 +29,22 @@ def extract_notes(transcript_path: str, output_path: str = "notes.md"):
     except ImportError:
         pass  # If not installed, it just skips this (useful if deploying online where dotenv isn't needed)
 
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        print("Error: GEMINI_API_KEY environment variable is not set.")
+        print("Error: OPENAI_API_KEY environment variable is not set.")
         print("Please set your API key in a .env file or your system environment variables.")
         print()
         print("1. Create a file called '.env' in this folder")
-        print("2. Put this inside it: GEMINI_API_KEY=your_actual_api_key_here")
+        print("2. Put this inside it: OPENAI_API_KEY=your_actual_api_key_here")
         sys.exit(1)
 
     print(f"[*] Reading transcript from: {transcript_path}")
     with open(transcript_path, "r", encoding="utf-8") as f:
         transcript_text = f.read()
 
-    print("[*] Connecting to Google Gemini (gemini-2.5-flash) ...")
-    client = genai.Client(api_key=api_key)
+    model_name = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    print(f"[*] Connecting to OpenAI ({model_name}) ...")
+    client = OpenAI(api_key=api_key)
 
     prompt = (
         "You are an expert professor and a world-class student note-taker. "
@@ -64,15 +65,16 @@ def extract_notes(transcript_path: str, output_path: str = "notes.md"):
     print("[*] Analyzing the lecture and writing notes. This may take 10-30 seconds...")
     
     try:
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
         )
     except Exception as e:
-        print(f"\n[!] Error calling Gemini API: {e}")
+        print(f"\n[!] Error calling OpenAI API: {e}")
         sys.exit(1)
 
-    notes = response.text
+    notes = response.choices[0].message.content or ""
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(notes)

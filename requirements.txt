@@ -1,4 +1,6 @@
 yt-dlp
 faster-whisper
-google-genai
+openai
 python-dotenv
+pytesseract
+pillow

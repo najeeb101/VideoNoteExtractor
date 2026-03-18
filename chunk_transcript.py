@@ -1,37 +1,72 @@
 import os
+import re
 
-def chunk_text(text, chunk_size=500, overlap=50):
-    words = text.split()
-    chunks = []
-    
-    # We step by (chunk_size - overlap) to ensure the chunks overlap
-    step = chunk_size - overlap
-    
-    # Ensure step is at least 1 to avoid an infinite loop if overlap >= chunk_size
-    if step <= 0:
-        step = chunk_size
 
-    for i in range(0, len(words), step):
-        chunk = " ".join(words[i:i + chunk_size])
-        chunks.append(chunk)
+TS_LINE_RE = re.compile(r"^\[(\d{2}:\d{2}:\d{2})\]\s+")
+
+
+def _read_transcript_path() -> str:
+    """
+    Prefer timestamped transcript when present, otherwise fall back to plain transcript.
+    """
+    if os.path.exists("transcript_timestamped.txt"):
+        return "transcript_timestamped.txt"
+    return "transcript.txt"
+
+
+def chunk_timestamped_lines(lines: list[str], max_words: int = 500, overlap_lines: int = 5) -> list[str]:
+    """
+    Chunks transcript by lines while preserving timestamps (when present).
+
+    - max_words: approximate cap per chunk
+    - overlap_lines: number of trailing lines to repeat into the next chunk
+    """
+    chunks: list[str] = []
+    i = 0
+    n = len(lines)
+
+    while i < n:
+        word_count = 0
+        start = i
+
+        while i < n and word_count < max_words:
+            word_count += len(lines[i].split())
+            i += 1
+
+        end = i
+        chunk = "\n".join(lines[start:end]).strip()
+        if chunk:
+            chunks.append(chunk)
+
+        if end >= n:
+            break
+
+        # Overlap a few lines for continuity
+        i = max(0, end - max(0, overlap_lines))
 
     return chunks
 
-# 1. Read the transcript
-with open("transcript.txt", "r", encoding="utf-8") as f:
-    transcript = f.read()
 
-# 2. Split into chunks
-chunks = chunk_text(transcript, chunk_size=500, overlap=50)
+def main() -> None:
+    transcript_path = _read_transcript_path()
+    with open(transcript_path, "r", encoding="utf-8") as f:
+        raw_lines = [line.rstrip("\n") for line in f]
 
-# 3. Create the chunks output directory if it doesn't exist
-output_dir = "chunks"
-os.makedirs(output_dir, exist_ok=True)
+    # Keep non-empty lines; if timestamped, keep original lines (including [HH:MM:SS])
+    lines = [ln.strip() for ln in raw_lines if ln.strip()]
 
-# 4. Save the chunks
-for i, chunk in enumerate(chunks):
-    filepath = os.path.join(output_dir, f"chunk_{i}.txt")
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(chunk)
+    chunks = chunk_timestamped_lines(lines, max_words=500, overlap_lines=5)
 
-print(f"Transcript split into {len(chunks)} chunks successfully!")
+    output_dir = "chunks"
+    os.makedirs(output_dir, exist_ok=True)
+
+    for idx, chunk in enumerate(chunks):
+        filepath = os.path.join(output_dir, f"chunk_{idx}.txt")
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(chunk)
+
+    print(f"Transcript ({transcript_path}) split into {len(chunks)} chunks successfully!")
+
+
+if __name__ == "__main__":
+    main()
