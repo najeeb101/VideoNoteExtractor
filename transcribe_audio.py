@@ -182,13 +182,13 @@ def transcribe_audio(
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage:   py step2_transcribe_audio.py <audio_file> [output_file] [model] [language]")
+        print("Usage:   py transcribe_audio.py <audio_file> [output_file] [model] [language]")
         print()
         print("Examples:")
-        print("  py step2_transcribe_audio.py audio.mp3")
+        print("  py transcribe_audio.py audio.mp3")
         print("    → auto-detects language + model, uses GPU if available")
         print()
-        print("  py step2_transcribe_audio.py audio.mp3 transcript.txt medium ar")
+        print("  py transcribe_audio.py audio.mp3 transcript.txt medium ar")
         print("    → forces Arabic + medium model")
         print()
         print("Available models : tiny, base, small, medium, large-v3")
