@@ -32,9 +32,10 @@ try:
 except ImportError:
     pass
 
-REPO_ROOT   = Path(__file__).resolve().parent
-OUTPUTS_DIR = REPO_ROOT / "outputs"
-STATIC_DIR  = REPO_ROOT / "static"
+REPO_ROOT    = Path(__file__).resolve().parent
+PIPELINE_DIR = REPO_ROOT / "pipeline"
+OUTPUTS_DIR  = REPO_ROOT / "outputs"
+STATIC_DIR   = REPO_ROOT / "static"
 
 FREE_TIER_LIMIT        = 3        # max runs per calendar month
 FREE_TIER_MAX_DURATION = 1200     # 20 minutes in seconds
@@ -312,7 +313,7 @@ async def start_run(body: RunRequest, user=Depends(get_current_user)):
     # Launch pipeline
     cmd = [
         sys.executable, "-u",
-        str(REPO_ROOT / "run_pipeline.py"),
+        str(PIPELINE_DIR / "run_pipeline.py"),
         "--url", url,
         "--run-id", run_id,
         "--no-visual",
