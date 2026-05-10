@@ -1,6 +1,11 @@
 yt-dlp
 faster-whisper
-openai
+google-genai
 python-dotenv
 pytesseract
 pillow
+fastapi
+uvicorn[standard]
+python-multipart
+numpy
+supabase
