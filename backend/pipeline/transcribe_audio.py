@@ -98,6 +98,12 @@ def pick_model(language: str) -> str:
     return model
 
 
+def _is_cuda_error(exc: Exception) -> bool:
+    """Heuristic: did this failure come from a missing/broken CUDA runtime?"""
+    s = str(exc).lower()
+    return any(k in s for k in ("cublas", "cudnn", "cuda", ".dll", "gpu"))
+
+
 def transcribe_audio(
     audio_path: str,
     output_path: str = "transcript.txt",
@@ -111,11 +117,9 @@ def transcribe_audio(
       - <output_path>               → plain transcript
       - <output_path>_timestamped   → transcript with [HH:MM:SS] timestamps
 
-    Args:
-        audio_path:  Path to the audio file.
-        output_path: Destination filename for the plain transcript.
-        model_name:  Whisper model size. If None, auto-selected by language.
-        language:    Language code (e.g. 'ar', 'en'). If None, auto-detected.
+    Device selection: honors WHISPER_DEVICE ("cpu"/"cuda") if set, otherwise
+    auto-detects. If CUDA is detected but its libraries fail to load at runtime
+    (common with pip-installed CUDA on Windows), it falls back to CPU.
 
     Returns:
         Absolute path to the plain transcript file.
@@ -123,8 +127,31 @@ def transcribe_audio(
     if not os.path.exists(audio_path):
         raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
-    device, compute_type = get_device()
+    forced = os.environ.get("WHISPER_DEVICE", "").strip().lower()
+    if forced in ("cpu", "cuda"):
+        device, compute_type = forced, ("float16" if forced == "cuda" else "int8")
+        print(f"[*] Device: {device.upper()} (WHISPER_DEVICE override)")
+    else:
+        device, compute_type = get_device()
 
+    try:
+        return _run_transcription(audio_path, output_path, model_name, language, device, compute_type)
+    except RuntimeError as exc:
+        if device == "cuda" and _is_cuda_error(exc):
+            print(f"[!] CUDA unavailable at runtime: {exc}")
+            print("[!] Falling back to CPU (int8, slower) ...")
+            return _run_transcription(audio_path, output_path, model_name, language, "cpu", "int8")
+        raise
+
+
+def _run_transcription(
+    audio_path: str,
+    output_path: str,
+    model_name: str | None,
+    language: str | None,
+    device: str,
+    compute_type: str,
+) -> str:
     # --- Auto-detect language ---
     if language is None:
         language, confidence = detect_language(audio_path, device, compute_type)

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -25,12 +26,25 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
 
+# Matches the 11-char video ID in common YouTube URL shapes.
+_YT_ID_RE = re.compile(r"(?:v=|/shorts/|youtu\.be/|/embed/|/v/)([A-Za-z0-9_-]{11})")
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def run(cmd: list[str], env: dict[str, str] | None = None) -> None:
     print(f"\n$ {' '.join(str(c) for c in cmd)}")
     subprocess.run(cmd, check=True, env=env)
+
+
+def derive_run_id(args: argparse.Namespace) -> str:
+    """Explicit --run-id wins; otherwise use the YouTube video ID or local file stem."""
+    if args.run_id:
+        return args.run_id
+    if args.url:
+        m = _YT_ID_RE.search(args.url)
+        return m.group(1) if m else "run"
+    return Path(args.video).stem
 
 
 def ensure_exists(path: str | Path, what: str) -> None:
@@ -59,11 +73,12 @@ def preflight_check(args: argparse.Namespace) -> None:
     except ImportError:
         pass  # python-dotenv not installed; rely on shell env
 
-    # 1. OpenAI API key — always required (summarize + reduce both need it)
-    if not os.environ.get("OPENAI_API_KEY"):
+    # 1. LLM API key — always required (summarize + reduce both need it).
+    #    Either OpenAI or Groq (OpenAI-compatible) works.
+    if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("GROQ_API_KEY"):
         errors.append(
-            "OPENAI_API_KEY is not set.\n"
-            "  → Add it to a .env file (copy .env.example) or export it in your shell."
+            "No LLM API key set — need OPENAI_API_KEY or GROQ_API_KEY.\n"
+            "  → Add one to a .env file (copy .env.example) or export it in your shell."
         )
 
     # 2. ffmpeg — needed when extracting audio from a local video or visual mode
@@ -97,7 +112,7 @@ def preflight_check(args: argparse.Namespace) -> None:
             print(f"  {i}. {err}\n")
         sys.exit(1)
 
-    print("[✓] Pre-flight checks passed.\n")
+    print("[OK] Pre-flight checks passed.\n")
 
 
 # ── Pipeline steps ────────────────────────────────────────────────────────────
@@ -209,6 +224,7 @@ def main() -> None:
     src.add_argument("--url", help="YouTube URL to process")
     src.add_argument("--video", help="Local video file path (mp4, mkv, etc.)")
 
+    p.add_argument("--run-id", default=None, help="Run identifier; outputs go to outputs/<run-id>/ (default: derived from URL/file)")
     p.add_argument("--audio", default="audio.mp3", help="Audio output path (default: audio.mp3)")
     p.add_argument("--transcript", default="transcript.txt", help="Transcript path (default: transcript.txt)")
     p.add_argument("--video-out", default="video.mp4", help="Video output path for --url (default: video.mp4)")
@@ -224,8 +240,25 @@ def main() -> None:
     args = p.parse_args()
     py = sys.executable
 
-    # ── Pre-flight ──
+    # Force child steps to emit UTF-8. Windows consoles/pipes default to cp1252,
+    # which crashes on the ✓/→/… characters the steps print. Children inherit these.
+    os.environ["PYTHONUTF8"] = "1"
+    os.environ["PYTHONIOENCODING"] = "utf-8"
+
+    # ── Pre-flight ── (runs before we change directories so .env in the CWD is found)
     preflight_check(args)
+
+    # Resolve the local video path to an absolute path before we chdir away.
+    if args.video:
+        args.video = str(Path(args.video).resolve())
+
+    # All step scripts read/write the CWD, so give each run its own directory.
+    run_id = derive_run_id(args)
+    out_dir = (Path.cwd() / "outputs" / run_id).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    os.chdir(out_dir)
+    print(f"[i] Run ID:           {run_id}")
+    print(f"[i] Output directory: {out_dir}\n")
 
     try:
         # 1. Acquire audio (and video if needed)
@@ -259,9 +292,9 @@ def main() -> None:
         sys.exit(1)
 
     print("\n[OK] Pipeline complete.")
-    print(f"  Notes:         {args.chunk_notes}")
+    print(f"  Notes:         {Path(args.chunk_notes).resolve()}")
     if not args.skip_reduce:
-        print(f"  Reduced notes: {args.reduced_notes}")
+        print(f"  Reduced notes: {Path(args.reduced_notes).resolve()}")
 
 
 if __name__ == "__main__":

@@ -29,22 +29,12 @@ def extract_notes(transcript_path: str, output_path: str = "notes.md"):
     except ImportError:
         pass  # If not installed, it just skips this (useful if deploying online where dotenv isn't needed)
 
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        print("Error: OPENAI_API_KEY environment variable is not set.")
-        print("Please set your API key in a .env file or your system environment variables.")
-        print()
-        print("1. Create a file called '.env' in this folder")
-        print("2. Put this inside it: OPENAI_API_KEY=your_actual_api_key_here")
-        sys.exit(1)
-
     print(f"[*] Reading transcript from: {transcript_path}")
     with open(transcript_path, "r", encoding="utf-8") as f:
         transcript_text = f.read()
 
-    model_name = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-    print(f"[*] Connecting to OpenAI ({model_name}) ...")
-    client = OpenAI(api_key=api_key)
+    from _llm import make_client_and_model
+    client, model_name = make_client_and_model()
 
     prompt = (
         "You are an expert professor and a world-class student note-taker. "

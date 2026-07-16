@@ -6,20 +6,20 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 
 export default function SettingsPage() {
   const [user, setUser] = useState<SupabaseUser | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const router = useRouter();
   const supabase = createClient();
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUser(data.user));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleSignOut() {

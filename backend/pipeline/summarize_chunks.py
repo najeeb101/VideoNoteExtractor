@@ -180,13 +180,8 @@ def summarize_chunks(
     if load_dotenv is not None:
         load_dotenv()
 
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        print("Error: OPENAI_API_KEY environment variable not found.")
-        sys.exit(1)
-
-    model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-    client = OpenAI(api_key=api_key)
+    from _llm import make_client_and_model
+    client, model = make_client_and_model()
 
     max_cost = _read_float_env("OPENAI_MAX_COST_USD", 0.0)
     input_cpp = _read_float_env("OPENAI_INPUT_COST_PER_MILLION", 0.0)

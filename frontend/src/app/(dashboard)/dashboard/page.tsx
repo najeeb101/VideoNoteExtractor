@@ -4,7 +4,6 @@ import { useState, useEffect, useRef } from "react";
 import { Plus, Video, Clock, Trash2, ChevronRight, Loader2, AlertCircle, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { createClient } from "@/lib/supabase/client";
@@ -20,6 +19,17 @@ function statusColor(status: Run["status"]) {
     failed: "bg-red-500/10 text-red-600 dark:text-red-400",
   }[status];
 }
+
+// Approximate progress for each pipeline step the backend reports (web runs skip "slides").
+const STEP_PROGRESS: Record<string, number> = {
+  preflight: 5,
+  download: 15,
+  transcribe: 45,
+  chunk: 55,
+  slides: 65,
+  summarize: 80,
+  reduce: 95,
+};
 
 function formatDuration(s: number | null) {
   if (!s) return "—";
@@ -55,7 +65,18 @@ export default function DashboardPage() {
     setLoading(false);
   }
 
-  useEffect(() => { loadRuns(); }, []);
+  useEffect(() => {
+    async function load() {
+      const token = await getToken();
+      try {
+        const data = await api.runs.list(token);
+        setRuns(data);
+      } catch {}
+      setLoading(false);
+    }
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -76,23 +97,39 @@ export default function DashboardPage() {
       setUrl("");
 
       const es = api.stream(run_id, token);
-      let prog = 0;
 
+      // Backend streams JSON envelopes: {type: "log"|"step"|"done"|"error"|"ping", ...}
       es.onmessage = (ev) => {
-        const line: string = ev.data;
-        setLogs((prev) => [...prev, line]);
-        prog = Math.min(prog + 8, 95);
-        setProgress(prog);
-        if (line.includes("Pipeline complete") || line.includes("done")) {
-          setProgress(100);
-          es.close();
-          loadRuns();
-          setActiveRunId(null);
+        let msg: { type: string; text?: string; name?: string; status?: string };
+        try {
+          msg = JSON.parse(ev.data);
+        } catch {
+          return;
         }
-        if (line.includes("ERROR") || line.includes("error")) {
-          setRunError(line);
-          es.close();
-          setActiveRunId(null);
+
+        switch (msg.type) {
+          case "log":
+            if (msg.text) setLogs((prev) => [...prev, msg.text!]);
+            break;
+          case "step":
+            if (msg.status === "running" && msg.name) {
+              const p = STEP_PROGRESS[msg.name];
+              if (p) setProgress((cur) => Math.max(cur, p));
+            }
+            break;
+          case "done":
+            setProgress(100);
+            es.close();
+            loadRuns();
+            setActiveRunId(null);
+            break;
+          case "error":
+            setRunError("Pipeline failed — check the logs above.");
+            es.close();
+            setActiveRunId(null);
+            loadRuns();
+            break;
+          // "ping" keep-alives: ignore
         }
       };
       es.onerror = () => {
@@ -174,6 +211,7 @@ export default function DashboardPage() {
             return (
               <div key={run.id} className="group flex items-center gap-4 rounded-lg border border-border bg-card px-4 py-3 hover:border-primary/20 transition-colors">
                 {run.thumbnail_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- remote YouTube thumbnail; next/image would need remotePatterns config
                   <img src={run.thumbnail_url} alt="" className="h-12 w-20 shrink-0 rounded object-cover" />
                 ) : (
                   <div className="flex h-12 w-20 shrink-0 items-center justify-center rounded bg-muted">
