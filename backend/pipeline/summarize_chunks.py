@@ -27,6 +27,10 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from _console import enable_utf8_console
+
+enable_utf8_console()
+
 try:
     from openai import OpenAI
 except ImportError:

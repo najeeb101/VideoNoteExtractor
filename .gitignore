@@ -10,7 +10,9 @@ __pycache__/
 audio.mp3
 audio.webm
 transcript*.txt
-*.md
 
-# Keep the README!
-!README.md
+# Pipeline-generated notes (regenerated per run) — ignore by name so docs like
+# README.md and CLAUDE.md stay tracked.
+chunk_notes.md
+notes_reduced.md
+notes.md

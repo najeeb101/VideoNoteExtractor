@@ -7,6 +7,10 @@ and generates structured Markdown study notes.
 import sys
 import os
 
+from _console import enable_utf8_console
+
+enable_utf8_console()
+
 try:
     from openai import OpenAI
 except ImportError:

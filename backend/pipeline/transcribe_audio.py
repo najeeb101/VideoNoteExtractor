@@ -8,6 +8,10 @@ selects the appropriate Whisper model, transcribes it using faster-whisper
 import sys
 import os
 
+from _console import enable_utf8_console
+
+enable_utf8_console()
+
 # --- Register NVIDIA DLL directories so ctranslate2 can find cublas/cudnn ---
 # Required on Windows when CUDA libraries are installed via pip (not CUDA Toolkit)
 def _add_nvidia_dll_dirs():

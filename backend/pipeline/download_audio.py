@@ -8,6 +8,10 @@ import subprocess
 import sys
 import os
 
+from _console import enable_utf8_console
+
+enable_utf8_console()
+
 
 def download_audio(youtube_url: str, output_path: str = "audio.mp3") -> str:
     """

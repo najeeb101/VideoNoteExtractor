@@ -24,6 +24,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _console import enable_utf8_console
+
+enable_utf8_console()
+
 REPO_ROOT = Path(__file__).resolve().parent
 
 # Matches the 11-char video ID in common YouTube URL shapes.
