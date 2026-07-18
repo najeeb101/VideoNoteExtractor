@@ -153,7 +153,6 @@ class RunJob:
 
 
 jobs: dict[str, RunJob] = {}
-rag_cache: dict[str, list[dict]] = {}
 
 
 def _detect_step(line: str) -> str | None:
@@ -318,12 +317,19 @@ async def start_run(body: RunRequest, user=Depends(get_current_user)):
         "--run-id", run_id,
         "--no-visual",
     ]
-    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    env = {
+        **os.environ,
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONUTF8": "1",           # steps print ✓/→/… — force UTF-8, not cp1252
+        "PYTHONIOENCODING": "utf-8",
+    }
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        encoding="utf-8",            # decode the child's UTF-8 output correctly
+        errors="replace",
         bufsize=1,
         env=env,
         cwd=str(REPO_ROOT),
@@ -468,7 +474,6 @@ async def delete_run(run_id: str, user=Depends(get_current_user)):
         import shutil
         shutil.rmtree(run_dir, ignore_errors=True)
     jobs.pop(run_id, None)
-    rag_cache.pop(run_id, None)
     return {"ok": True}
 
 
@@ -487,66 +492,53 @@ async def chat(run_id: str, body: ChatRequest, user=Depends(get_current_user)):
     _assert_run_owner(run_id, user.id)
     run_dir = _safe_run_dir(run_id)
 
-    api_key = os.environ.get("GOOGLE_API_KEY")
+    api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        raise HTTPException(503, "GOOGLE_API_KEY is not set.")
+        raise HTTPException(503, "GROQ_API_KEY is not set.")
 
     loop = asyncio.get_event_loop()
-
-    if run_id not in rag_cache:
-        index = await loop.run_in_executor(None, _build_rag_index, run_dir, api_key)
-        rag_cache[run_id] = index
-    index = rag_cache[run_id]
-
-    user_query = next((m.content for m in reversed(body.messages) if m.role == "user"), "")
 
     reduced_notes = ""
     rn = run_dir / "notes_reduced.md"
     if rn.exists():
         reduced_notes = rn.read_text(encoding="utf-8")[:5_000]
 
-    if index and user_query:
-        relevant = await loop.run_in_executor(None, _retrieve_relevant, user_query, index, api_key)
-        retrieved = "\n\n---\n\n".join(f"{e['ts_range']}\n{e['text']}" for e in relevant)
-        context = f"VIDEO OUTLINE:\n{reduced_notes}\n\nRELEVANT TRANSCRIPT SECTIONS:\n{retrieved}"
-    else:
-        cn = run_dir / "chunk_notes.md"
-        chunk_notes = cn.read_text(encoding="utf-8")[:80_000] if cn.exists() else ""
-        if not chunk_notes and not reduced_notes:
-            raise HTTPException(404, "No notes available for this run.")
-        context = f"DETAILED NOTES:\n{chunk_notes}\n\nOUTLINE:\n{reduced_notes}"
+    cn = run_dir / "chunk_notes.md"
+    chunk_notes = cn.read_text(encoding="utf-8")[:80_000] if cn.exists() else ""
+    if not chunk_notes and not reduced_notes:
+        raise HTTPException(404, "No notes available for this run.")
+    context = f"DETAILED NOTES:\n{chunk_notes}\n\nOUTLINE:\n{reduced_notes}"
 
     system = (
         "You are a helpful study assistant for a student who watched a video lecture.\n"
-        "Answer questions based on the transcript sections and outline below. "
+        "Answer questions based on the notes and outline below. "
         "Reference timestamps like [HH:MM:SS] when relevant. "
         "If the context doesn't cover the question, say so clearly.\n\n"
         + context
     )
 
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+    model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
     token_q: asyncio.Queue = asyncio.Queue()
 
     def _stream():
         try:
-            from google import genai as _genai
-            from google.genai import types as _types
-            client = _genai.Client(api_key=api_key)
-            contents = [
-                _types.Content(
-                    role="user" if m.role == "user" else "model",
-                    parts=[_types.Part(text=m.content)],
-                )
+            from groq import Groq
+            client = Groq(api_key=api_key)
+            messages = [{"role": "system", "content": system}]
+            messages += [
+                {"role": "assistant" if m.role == "assistant" else "user", "content": m.content}
                 for m in body.messages
             ]
-            stream = client.models.generate_content_stream(
+            stream = client.chat.completions.create(
                 model=model,
-                contents=contents,
-                config=_types.GenerateContentConfig(system_instruction=system, temperature=0.3),
+                messages=messages,
+                temperature=0.3,
+                stream=True,
             )
             for chunk in stream:
-                if chunk.text:
-                    asyncio.run_coroutine_threadsafe(token_q.put(("token", chunk.text)), loop)
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    asyncio.run_coroutine_threadsafe(token_q.put(("token", delta)), loop)
         except Exception as exc:
             asyncio.run_coroutine_threadsafe(token_q.put(("error", str(exc))), loop)
         asyncio.run_coroutine_threadsafe(token_q.put(None), loop)
@@ -571,84 +563,6 @@ async def chat(run_id: str, body: ChatRequest, user=Depends(get_current_user)):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-
-
-# ── RAG helpers ───────────────────────────────────────────────────────────────
-
-_RAG_TS_RE = re.compile(r"\[(\d{2}:\d{2}:\d{2})\]")
-_EMB_MODEL  = "text-embedding-004"
-_EMB_LIMIT  = 6000
-
-
-def _build_rag_index(run_dir: Path, api_key: str) -> list[dict]:
-    index_path = run_dir / "rag_index.json"
-    if index_path.exists():
-        try:
-            data = json.loads(index_path.read_text(encoding="utf-8"))
-            if data and all("embedding" in e for e in data):
-                return data
-        except Exception:
-            pass
-
-    chunks_dir = run_dir / "chunks"
-    if not chunks_dir.exists():
-        return []
-
-    files = sorted(chunks_dir.glob("chunk_*.txt"), key=lambda p: int(p.stem.split("_")[1]))
-    if not files:
-        return []
-
-    from google import genai as _genai
-    from google.genai import types as _types
-    client = _genai.Client(api_key=api_key)
-    entries: list[dict] = []
-
-    for f in files:
-        text = f.read_text(encoding="utf-8")
-        ts_matches = _RAG_TS_RE.findall(text)
-        start_ts = ts_matches[0] if ts_matches else None
-        end_ts   = ts_matches[-1] if ts_matches else None
-        ts_range = f"[{start_ts} – {end_ts}]" if start_ts else ""
-        try:
-            resp = client.models.embed_content(
-                model=_EMB_MODEL,
-                contents=text[:_EMB_LIMIT],
-                config=_types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
-            )
-            emb = resp.embeddings[0].values
-        except Exception as exc:
-            print(f"[rag] embedding failed for {f.name}: {exc}")
-            continue
-        entries.append({"text": text, "source": f.name, "ts_range": ts_range, "embedding": emb})
-
-    if entries:
-        index_path.write_text(json.dumps(entries), encoding="utf-8")
-    return entries
-
-
-def _retrieve_relevant(query: str, index: list[dict], api_key: str, top_k: int = 5) -> list[dict]:
-    import numpy as np
-    from google import genai as _genai
-    from google.genai import types as _types
-    client = _genai.Client(api_key=api_key)
-    try:
-        resp = client.models.embed_content(
-            model=_EMB_MODEL,
-            contents=query,
-            config=_types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
-        )
-        q_vec = np.array(resp.embeddings[0].values, dtype=np.float32)
-    except Exception:
-        return index[:top_k]
-
-    scored = []
-    for entry in index:
-        d_vec = np.array(entry["embedding"], dtype=np.float32)
-        denom = np.linalg.norm(q_vec) * np.linalg.norm(d_vec)
-        score = float(np.dot(q_vec, d_vec) / denom) if denom > 0 else 0.0
-        scored.append((score, entry))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [e for _, e in scored[:top_k]]
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

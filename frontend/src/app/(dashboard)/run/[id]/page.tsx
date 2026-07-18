@@ -37,6 +37,7 @@ export default function RunPage() {
       setLoading(false);
     }
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {
@@ -59,20 +60,43 @@ export default function RunPage() {
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
+    let buffer = "";
     let assistantContent = "";
 
     setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
-      assistantContent += chunk;
+    const paint = () =>
       setMessages((prev) => {
         const updated = [...prev];
         updated[updated.length - 1] = { role: "assistant", content: assistantContent };
         return updated;
       });
+
+    // The backend streams SSE frames: `data: {"token"|"error"|"done": ...}\n\n`
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+
+      for (const frame of frames) {
+        const line = frame.trim();
+        if (!line.startsWith("data:")) continue;
+        try {
+          const obj = JSON.parse(line.slice(5).trim());
+          if (obj.token) {
+            assistantContent += obj.token;
+            paint();
+          } else if (obj.error) {
+            assistantContent += `\n\n_[Error: ${obj.error}]_`;
+            paint();
+          }
+        } catch {
+          // ignore keep-alive / partial frames
+        }
+      }
     }
     setStreaming(false);
   }

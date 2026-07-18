@@ -1,6 +1,7 @@
 yt-dlp
 faster-whisper
-google-genai
+openai
+groq
 python-dotenv
 pytesseract
 pillow

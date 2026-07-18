@@ -1,129 +1,110 @@
-# VideoNoteExtractor
+# Lectura (VideoNoteExtractor)
 
-Turn a YouTube video into study notes:
+Turn a YouTube lecture into structured study notes you can read, export, and chat with.
 
-1) Download audio (`download_audio.py`)
-2) Transcribe (`transcribe_audio.py`)
-3) (Optional) Chunk transcript (`chunk_transcript.py`)
-4) Generate notes with an LLM:
-   - `summarize_chunks.py` → in-depth chunk notes with timestamps into `chunk_notes.md`
-   - `reduce_notes.py` → overall consolidated outline into `notes_reduced.md`
-   - `extract_notes.py` → one structured Markdown study guide into `notes.md`
+A Python pipeline downloads a video's audio, transcribes it locally (faster-whisper),
+and uses an LLM to generate notes. A FastAPI backend wraps that in an authenticated,
+free-tier-gated API; a Next.js frontend provides the dashboard, notes viewer, and a
+"chat with your notes" panel.
+
+## Repository layout
+
+```
+backend/            FastAPI server + the note-extraction pipeline
+  app.py            Web server (auth, free tier, SSE logs, chat)
+  pipeline/         Self-contained pipeline steps + run_pipeline.py orchestrator
+  requirements.txt
+frontend/           Next.js 16 app (App Router, React 19, Tailwind v4, shadcn)
+supabase/schema.sql Postgres schema, RLS policies, storage bucket
+```
+
+## LLM providers
+
+- **Groq** — the backend `/api/chat` endpoint (OpenAI-compatible), and the default for the pipeline too. Default model `llama-3.3-70b-versatile`.
+- **OpenAI** — optional. If `OPENAI_API_KEY` is set, the pipeline uses it for note generation (`summarize`, `reduce`, `extract`) instead of Groq. Default `gpt-4o-mini`.
+
+You can run the entire app on a single Groq key — no OpenAI account required.
+
+## Prerequisites
+
+- Python 3.11+ with a virtualenv at `.venv/`
+- Node.js 20+ (for the frontend)
+- **ffmpeg** on PATH (`winget install ffmpeg`) — audio extraction / download
+- **Tesseract OCR** — only for optional slide/visual mode (skip with `--no-visual`)
+- A Supabase project (for the web app's auth + persistence)
 
 ## Setup
 
-Install deps:
+### Backend
 
-```bash
-py -m pip install -r requirements.txt
+```powershell
+.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
 ```
 
-Create a `.env` file in the repo root.
+Copy `.env.example` to `.env` (repo root) and fill in `GROQ_API_KEY` and your Supabase
+`SUPABASE_URL` / `SUPABASE_SERVICE_KEY`. `OPENAI_API_KEY` is optional — the pipeline
+falls back to Groq without it. See `.env.example` for the full list of options.
 
-## OpenAI configuration
+Apply the database schema by running `supabase/schema.sql` in the Supabase SQL editor.
 
-In `.env`, set:
+### Frontend
+
+```powershell
+cd frontend
+npm install
+```
+
+Create `frontend/.env.local` with:
 
 ```env
-OPENAI_API_KEY=your_key_here
-OPENAI_MODEL=gpt-4o-mini
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
 ```
 
-## Usage
+## Running the web app
 
-## One-command runner (recommended)
+```powershell
+# Terminal 1 — backend API (http://127.0.0.1:8000)
+.venv\Scripts\python.exe backend\app.py
 
-Run everything (audio + transcript + timestamped chunk notes + reduced outline). This supports either a YouTube URL or a local video file.
-
-YouTube URL:
-
-```bash
-py run_pipeline.py --url "https://www.youtube.com/watch?v=VIDEO_ID"
+# Terminal 2 — frontend (http://localhost:3000)
+cd frontend ; npm run dev
 ```
 
-Local video file:
+Sign in, paste a YouTube URL, and watch the pipeline stream progress. Free tier allows
+3 videos/month, up to 20 minutes each. Completed runs expire after 7 days.
 
-```bash
-py run_pipeline.py --video "path/to/video.mp4"
-```
+## Running the pipeline directly (CLI, no web app)
 
-Skip visual slide OCR (audio-only):
+`run_pipeline.py` writes all outputs into `outputs/<run-id>/` under the current directory.
 
-```bash
-py run_pipeline.py --url "https://www.youtube.com/watch?v=VIDEO_ID" --no-visual
+```powershell
+# YouTube URL (visual/slide mode on by default)
+.venv\Scripts\python.exe backend\pipeline\run_pipeline.py --url "https://www.youtube.com/watch?v=VIDEO_ID"
+
+# Local video file
+.venv\Scripts\python.exe backend\pipeline\run_pipeline.py --video "path\to\video.mp4"
+
+# Audio-only (skip slide extraction + OCR — no Tesseract needed)
+.venv\Scripts\python.exe backend\pipeline\run_pipeline.py --url "..." --no-visual
 ```
 
 Outputs:
-- `chunk_notes.md` (in-depth notes with timestamps)
-- `notes_reduced.md` (overall outline)
+- `chunk_notes.md` — in-depth notes with timestamps
+- `notes_reduced.md` — consolidated outline
 
-If you enable visual mode and run slide OCR, `summarize_chunks.py` will incorporate slide text automatically.
+## Pipeline steps
 
-Download audio:
+Each step in `backend/pipeline/` is runnable standalone and reads/writes the current
+working directory:
 
-```bash
-py download_audio.py "https://www.youtube.com/watch?v=VIDEO_ID"
-```
+1. `download_audio.py` — YouTube → `audio.mp3` (yt-dlp)
+2. `transcribe_audio.py` — audio → `transcript.txt` + `transcript_timestamped.txt` (faster-whisper, auto language/model, GPU if available)
+3. `chunk_transcript.py` — transcript → `chunks/chunk_*.txt`
+4. `summarize_chunks.py` — chunks → `chunk_notes.md` (Groq/OpenAI; merges slide OCR if present)
+5. `reduce_notes.py` — `chunk_notes.md` → `notes_reduced.md` (map-reduce consolidation)
 
-Transcribe:
-
-```bash
-py transcribe_audio.py audio.mp3 transcript.txt
-```
-
-Chunk transcript (prefers `transcript_timestamped.txt` if present → writes `chunks/chunk_*.txt`):
-
-```bash
-py chunk_transcript.py
-```
-
-Summarize chunks into per-chunk notes (writes `chunk_notes.md`). If chunks include timestamps (recommended), bullets will include timestamps like `[00:12:34]`:
-
-```bash
-py summarize_chunks.py
-```
-
-Reduce chunk bullets into one outline (writes `notes_reduced.md`):
-
-```bash
-py reduce_notes.py
-```
-
-Or generate full structured notes from timestamped transcript (writes `notes.md`):
-
-```bash
-py extract_notes.py transcript_timestamped.txt notes.md
-```
-
-## Optional: Visual study mode (slides + OCR)
-
-For slide lectures (and math/physics), audio-only can miss on-screen text and equations. Visual mode extracts slide frames, OCRs them, and feeds the slide text into chunk note generation.
-
-1) Download the video:
-
-```bash
-py download_video.py "https://www.youtube.com/watch?v=VIDEO_ID" video.mp4
-```
-
-2) Extract slide frames (scene-change detection):
-
-```bash
-py extract_slides.py video.mp4 slides
-```
-
-3) OCR the slides (local Tesseract):
-
-```bash
-py ocr_slides.py slides/frames.json slides/index.json
-```
-
-4) Regenerate chunk notes (will auto-load `slides/index.json` if present):
-
-```bash
-py summarize_chunks.py
-```
-
-### Requirements for visual mode
-
-- **ffmpeg**: required by `extract_slides.py` (and commonly needed by yt-dlp). Must be on PATH.
-- **Tesseract OCR**: install it locally, then either add it to PATH or set `TESSERACT_CMD` to the `tesseract.exe` path.\n- Optional env vars:\n  - `SLIDE_SCENE_THRESHOLD` (default `0.35`)\n  - `SLIDE_MAX_FRAMES` (optional cap)\n  - `OCR_LANG` (e.g. `eng`)\n  - `SLIDES_INDEX_PATH` (default `slides/index.json`)\n
+Optional visual mode adds `download_video.py` → `extract_slides.py` → `ocr_slides.py`,
+feeding slide OCR text into step 4. `extract_notes.py` is an alternate one-shot path
+(timestamped transcript → single `notes.md`).

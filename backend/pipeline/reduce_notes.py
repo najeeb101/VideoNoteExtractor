@@ -99,12 +99,8 @@ def reduce_notes(input_path: str = "chunk_notes.md", output_path: str = "notes_r
     if load_dotenv is not None:
         load_dotenv()
 
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY environment variable not found.")
-
-    model_name = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-    client = OpenAI(api_key=api_key)
+    from _llm import make_client_and_model
+    client, model_name = make_client_and_model()
 
     with open(input_path, "r", encoding="utf-8") as f:
         raw = f.read()
@@ -120,7 +116,6 @@ def reduce_notes(input_path: str = "chunk_notes.md", output_path: str = "notes_r
     batches = _pack_batches(takeaway_lines, max_chars=max_chars)
 
     print(f"[*] Reducing {len(takeaway_lines)} lines from {input_path} in {len(batches)} batch(es)...")
-    print(f"[*] Using OpenAI model: {model_name}")
 
     partials: List[str] = []
     for i, batch in enumerate(batches, start=1):
