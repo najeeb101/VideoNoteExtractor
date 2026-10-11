@@ -528,8 +528,9 @@ async def chat(run_id: str, body: ChatRequest, user=Depends(get_current_user)):
     _assert_run_owner(run_id, user.id)
     run_dir = _safe_run_dir(run_id)
 
+    use_ollama = os.environ.get("LLM_PROVIDER", "").lower() == "ollama"
     api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
+    if not use_ollama and not api_key:
         raise HTTPException(503, "GROQ_API_KEY is not set.")
 
     loop = asyncio.get_event_loop()
@@ -540,7 +541,9 @@ async def chat(run_id: str, body: ChatRequest, user=Depends(get_current_user)):
         reduced_notes = rn.read_text(encoding="utf-8")[:5_000]
 
     cn = run_dir / "chunk_notes.md"
-    chunk_notes = cn.read_text(encoding="utf-8")[:80_000] if cn.exists() else ""
+    # Local models have a much smaller context window than Groq's.
+    chunk_limit = 24_000 if use_ollama else 80_000
+    chunk_notes = cn.read_text(encoding="utf-8")[:chunk_limit] if cn.exists() else ""
     if not chunk_notes and not reduced_notes:
         raise HTTPException(404, "No notes available for this run.")
     context = f"DETAILED NOTES:\n{chunk_notes}\n\nOUTLINE:\n{reduced_notes}"
@@ -553,13 +556,24 @@ async def chat(run_id: str, body: ChatRequest, user=Depends(get_current_user)):
         + context
     )
 
-    model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+    if use_ollama:
+        # Larger-context variant of the pipeline model; see backend/ollama/Modelfile.chat
+        model = os.environ.get("OLLAMA_CHAT_MODEL", "lectura-chat")
+    else:
+        model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
     token_q: asyncio.Queue = asyncio.Queue()
 
     def _stream():
         try:
-            from groq import Groq
-            client = Groq(api_key=api_key)
+            if use_ollama:
+                from openai import OpenAI
+                client = OpenAI(
+                    api_key="ollama",
+                    base_url=os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434/v1",
+                )
+            else:
+                from groq import Groq
+                client = Groq(api_key=api_key)
             messages = [{"role": "system", "content": system}]
             messages += [
                 {"role": "assistant" if m.role == "assistant" else "user", "content": m.content}

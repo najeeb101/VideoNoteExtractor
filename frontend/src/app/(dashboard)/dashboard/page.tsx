@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { createClient } from "@/lib/supabase/client";
+import { PENDING_URL_KEY } from "@/components/hero-url-form";
 import { api, type Run } from "@/lib/api";
 import Link from "next/link";
 import { formatDistanceToNow, differenceInDays } from "date-fns";
@@ -75,6 +76,14 @@ export default function DashboardPage() {
       const token = await getToken();
       try {
         setRuns(await api.runs.list(token));
+      } catch {}
+      try {
+        const pending = sessionStorage.getItem(PENDING_URL_KEY);
+        if (pending) {
+          sessionStorage.removeItem(PENDING_URL_KEY);
+          setUrl(pending);
+          setShowModal(true);
+        }
       } catch {}
       try {
         const m = await api.models(token);
