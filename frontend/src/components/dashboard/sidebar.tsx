@@ -31,11 +31,11 @@ export function Sidebar({ user }: { user: User }) {
   }
 
   return (
-    <aside className="flex h-full w-56 shrink-0 flex-col border-r border-border bg-sidebar">
+    <aside className="flex h-full w-14 shrink-0 flex-col md:w-56 border-r border-border bg-sidebar">
       {/* Logo */}
       <div className="flex h-14 items-center gap-2 border-b border-sidebar-border px-4">
         <BookOpen className="h-5 w-5 text-primary" />
-        <span className="font-semibold text-sidebar-foreground">Lectura</span>
+        <span className="hidden font-semibold text-sidebar-foreground md:inline">Lectura</span>
       </div>
 
       {/* Nav */}
@@ -46,13 +46,13 @@ export function Sidebar({ user }: { user: User }) {
             href={href}
             className={cn(
               "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors",
-              pathname === href
+              pathname.startsWith(href)
                 ? "bg-sidebar-accent text-sidebar-foreground font-medium"
                 : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
             )}
           >
-            <Icon className="h-4 w-4" />
-            {label}
+            <Icon className="h-4 w-4 shrink-0" />
+            <span className="hidden md:inline">{label}</span>
           </Link>
         ))}
       </nav>
@@ -64,24 +64,24 @@ export function Sidebar({ user }: { user: User }) {
           className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
         >
           {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          {theme === "dark" ? "Light mode" : "Dark mode"}
+          <span className="hidden md:inline">{theme === "dark" ? "Light mode" : "Dark mode"}</span>
         </button>
         <button
           onClick={handleSignOut}
           className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
         >
-          <LogOut className="h-4 w-4" />
-          Sign out
+          <LogOut className="h-4 w-4 shrink-0" />
+          <span className="hidden md:inline">Sign out</span>
         </button>
 
         <Separator className="my-2" />
 
-        <div className="flex items-center gap-2.5 px-3 py-1">
+        <div className="flex items-center justify-center gap-2.5 px-1 py-1 md:justify-start md:px-3">
           <Avatar className="h-7 w-7">
             <AvatarImage src={user.user_metadata?.avatar_url} />
             <AvatarFallback className="text-xs">{initials}</AvatarFallback>
           </Avatar>
-          <div className="min-w-0 flex-1">
+          <div className="hidden min-w-0 flex-1 md:block">
             <p className="truncate text-xs font-medium text-sidebar-foreground">
               {user.user_metadata?.full_name ?? user.email}
             </p>
