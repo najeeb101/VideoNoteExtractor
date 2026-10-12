@@ -54,6 +54,8 @@ export const api = {
     delete: (token: string, runId: string) =>
       apiFetch<void>(`/api/runs/${runId}`, token, { method: "DELETE" }),
   },
+  usage: (token: string) =>
+    apiFetch<{ used: number; limit: number }>("/api/usage", token),
   models: (token: string) =>
     apiFetch<{ models: string[]; default: string }>("/api/models", token),
   chat: {

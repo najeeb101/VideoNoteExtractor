@@ -74,6 +74,28 @@ create policy "Users can delete own notes"
   using (auth.uid() = user_id);
 
 -- ============================================================
+-- Run usage — one row per started run, for free-tier limits.
+-- Kept apart from `runs` because users can delete their own runs
+-- (and the cleanup cron deletes expired ones); counting `runs` would
+-- hand quota back. RLS on with no policies: only the backend's
+-- service role can read or write it.
+-- Safe to re-run on an existing database (also backfills).
+-- ============================================================
+create table if not exists public.run_usage (
+  run_id      uuid primary key,
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  created_at  timestamptz not null default now()
+);
+
+create index if not exists run_usage_user_created_idx on public.run_usage(user_id, created_at);
+
+alter table public.run_usage enable row level security;
+
+insert into public.run_usage (run_id, user_id, created_at)
+select id, user_id, created_at from public.runs
+on conflict (run_id) do nothing;
+
+-- ============================================================
 -- Storage bucket for run outputs
 -- ============================================================
 insert into storage.buckets (id, name, public)

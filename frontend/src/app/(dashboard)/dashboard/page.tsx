@@ -13,9 +13,6 @@ import Link from "next/link";
 import { formatDistanceToNow, differenceInDays } from "date-fns";
 import { cn } from "@/lib/utils";
 
-// Keep in sync with FREE_TIER_LIMIT in backend/app.py.
-const FREE_LIMIT = 3;
-
 function statusColor(status: Run["status"]) {
   return {
     done: "bg-green-500/10 text-green-600 dark:text-green-400",
@@ -45,6 +42,7 @@ function formatDuration(s: number | null) {
 
 export default function DashboardPage() {
   const [runs, setRuns] = useState<Run[]>([]);
+  const [usage, setUsage] = useState<{ used: number; limit: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [url, setUrl] = useState("");
@@ -67,19 +65,16 @@ export default function DashboardPage() {
 
   async function loadRuns() {
     const token = await getToken();
-    try {
-      const data = await api.runs.list(token);
-      setRuns(data);
-    } catch {}
+    const [runsRes, usageRes] = await Promise.allSettled([api.runs.list(token), api.usage(token)]);
+    if (runsRes.status === "fulfilled") setRuns(runsRes.value);
+    if (usageRes.status === "fulfilled") setUsage(usageRes.value);
     setLoading(false);
   }
 
   useEffect(() => {
     async function load() {
       const token = await getToken();
-      try {
-        setRuns(await api.runs.list(token));
-      } catch {}
+      await loadRuns();
       try {
         const pending = sessionStorage.getItem(PENDING_URL_KEY);
         if (pending) {
@@ -201,11 +196,8 @@ export default function DashboardPage() {
     } catch {}
   }
 
-  const freeUsed = runs.filter((r) => {
-    const d = new Date(r.created_at);
-    const now = new Date();
-    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-  }).length;
+  // Server-side count: deleting a video doesn't give the run back.
+  const limitReached = usage ? usage.used >= usage.limit : false;
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-8">
@@ -217,25 +209,27 @@ export default function DashboardPage() {
             Turn any YouTube lecture into searchable notes.
           </p>
         </div>
-        <Button onClick={() => setShowModal(true)} disabled={freeUsed >= FREE_LIMIT} className="gap-2 self-start sm:self-auto">
+        <Button onClick={() => setShowModal(true)} disabled={limitReached} className="gap-2 self-start sm:self-auto">
           <Plus className="h-4 w-4" />
           New video
         </Button>
       </div>
 
       {/* Free tier bar */}
-      <div className="mb-8 rounded-lg border border-border bg-card p-4">
-        <div className="mb-2 flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">Free tier usage</span>
-          <span className="font-medium">{freeUsed} / {FREE_LIMIT} videos this month</span>
+      {usage && (
+        <div className="mb-8 rounded-lg border border-border bg-card p-4">
+          <div className="mb-2 flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Free tier usage</span>
+            <span className="font-medium">{usage.used} / {usage.limit} videos this month</span>
+          </div>
+          <Progress value={Math.min(usage.used / usage.limit, 1) * 100} className="h-1.5" />
+          {limitReached && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              You&apos;ve used all {usage.limit} free videos this month. Upgrade to Pro for unlimited access.
+            </p>
+          )}
         </div>
-        <Progress value={(freeUsed / FREE_LIMIT) * 100} className="h-1.5" />
-        {freeUsed >= FREE_LIMIT && (
-          <p className="mt-2 text-xs text-muted-foreground">
-            You&apos;ve used all {FREE_LIMIT} free videos this month. Upgrade to Pro for unlimited access.
-          </p>
-        )}
-      </div>
+      )}
 
       {/* Runs list */}
       {loading ? (

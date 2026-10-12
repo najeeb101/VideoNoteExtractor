@@ -114,7 +114,7 @@ YouTube URL / local video
 FastAPI, thread-per-job model. `/api/run` spawns `run_pipeline.py` as a subprocess (always with `--no-visual`); `_read_subprocess_output` runs in a daemon thread parsing stdout into a `queue.Queue`; the SSE endpoint `/api/stream/{run_id}` drains it via `run_in_executor`. Step progress is inferred by matching `$ …` log lines against `STEP_PATTERNS`.
 
 - **Auth**: every endpoint depends on a Supabase JWT — `Authorization: Bearer` header for normal calls, `?token=` query param for SSE (`EventSource` can't set headers).
-- **Free tier**: `FREE_TIER_LIMIT` runs/calendar-month and `FREE_TIER_MAX_DURATION` (20 min, checked via a yt-dlp metadata probe) enforced in `/api/run`. Concurrent runs by the same user are rejected (HTTP 409).
+- **Free tier**: `FREE_TIER_LIMIT` runs/calendar-month and `FREE_TIER_MAX_DURATION` (20 min, checked via a yt-dlp metadata probe) enforced in `/api/run`. Concurrent runs by the same user are rejected (HTTP 409). Usage is counted from the `run_usage` table (service-role only, no RLS policies), not `runs`: users can delete their own `runs` rows, which would refund quota. `GET /api/usage` feeds the dashboard's usage bar.
 - **Persistence**: on completion, `_on_pipeline_complete` updates the `runs` row and inserts generated notes into the `notes` table.
 - **Chat** (`/api/chat/{run_id}`): stuffs `chunk_notes.md` (≤80k chars) + `notes_reduced.md` (≤5k) into the system prompt and streams a Groq answer. (No embeddings/RAG — Groq has no embeddings API, and a ≤20-min free-tier video's notes fit comfortably in context.)
 - **Safety**: `_safe_run_dir` validates run dirs stay under `outputs/`; downloads gated to `DOWNLOAD_ALLOWLIST`; `_assert_run_owner` checks ownership against Supabase.

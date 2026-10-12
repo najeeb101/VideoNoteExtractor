@@ -27,6 +27,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+from pipeline._llm import completion_kwargs
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -109,14 +111,16 @@ def get_current_user_sse(token: str = Query(default=None)):
 # ── Free tier helpers ─────────────────────────────────────────────────────────
 
 def _count_runs_this_month(user_id: str) -> int:
+    # Counted from run_usage, not runs: users can delete runs, which would
+    # otherwise refund their quota.
     sb = _get_supabase()
     if not sb:
         return 0
     now = datetime.now(timezone.utc)
     start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     result = (
-        sb.table("runs")
-        .select("id", count="exact")
+        sb.table("run_usage")
+        .select("run_id", count="exact")
         .eq("user_id", user_id)
         .gte("created_at", start.isoformat())
         .execute()
@@ -291,6 +295,13 @@ async def list_models(user=Depends(get_current_user)):
     return {"models": models, "default": default}
 
 
+@app.get("/api/usage")
+async def usage(user=Depends(get_current_user)):
+    loop = asyncio.get_event_loop()
+    used = await loop.run_in_executor(None, _count_runs_this_month, user.id)
+    return {"used": used, "limit": FREE_TIER_LIMIT}
+
+
 @app.post("/api/run")
 async def start_run(body: RunRequest, user=Depends(get_current_user)):
     url = body.url.strip()
@@ -343,7 +354,12 @@ async def start_run(body: RunRequest, user=Depends(get_current_user)):
                 "duration_seconds": duration or None,
                 "expires_at":       expires,
             }).execute()
+            sb.table("run_usage").insert({"run_id": run_id, "user_id": user.id}).execute()
         except Exception as exc:
+            try:
+                sb.table("runs").delete().eq("id", run_id).execute()
+            except Exception:
+                pass
             raise HTTPException(500, f"Failed to create run record: {exc}")
 
     # Launch pipeline
@@ -586,6 +602,7 @@ async def chat(run_id: str, body: ChatRequest, user=Depends(get_current_user)):
                 messages=messages,
                 temperature=0.3,
                 stream=True,
+                **completion_kwargs(model),
             )
             for chunk in stream:
                 delta = chunk.choices[0].delta.content
