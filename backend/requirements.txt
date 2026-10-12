@@ -1,4 +1,4 @@
-yt-dlp
+yt-dlp>=2026.8.19  # YouTube breaks old versions (403); upgrade regularly
 faster-whisper
 openai
 groq
@@ -10,3 +10,7 @@ uvicorn[standard]
 python-multipart
 numpy
 supabase
+
+# Optional: GPU transcription (faster-whisper on CUDA 12). Skip to run on CPU.
+nvidia-cublas-cu12; sys_platform != "darwin"
+nvidia-cudnn-cu12==9.*; sys_platform != "darwin"

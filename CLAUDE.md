@@ -23,6 +23,20 @@ External binaries required on PATH:
 - **ffmpeg** — audio extraction and video download (`winget install ffmpeg`)
 - **Tesseract OCR** — slide OCR only; bypass with `--no-visual` or set `TESSERACT_CMD`
 
+## Local LLM (Ollama, optional)
+
+No API key or cost: set `LLM_PROVIDER=ollama` in `.env`. One-time setup:
+
+```powershell
+ollama pull qwen3:4b-instruct-2507-q4_K_M
+ollama create lectura-notes -f backend/ollama/Modelfile        # pipeline, 8k context
+ollama create lectura-chat  -f backend/ollama/Modelfile.chat   # /api/chat, 16k context
+```
+
+With the provider on, both the pipeline and `/api/chat` use Ollama (`OLLAMA_MODEL`, `OLLAMA_CHAT_MODEL`, `OLLAMA_BASE_URL`). `GET /api/models` lists installed models of 6 GB or less; `/api/run` accepts an optional `model` from that list. The `/v1` endpoint cannot set `num_ctx` per request, hence the Modelfiles. Chat caps `chunk_notes.md` at 24k chars on Ollama (80k on Groq).
+
+GPU transcription needs the pip CUDA wheels (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`, in requirements.txt); `transcribe_audio.py` registers their DLL dirs and falls back to CPU if they fail. Keep `yt-dlp` current — old versions get HTTP 403 from YouTube.
+
 ## Running the full stack
 
 ```powershell
@@ -62,6 +76,7 @@ Copy `.env.example` to `.env` (repo root). **Two different LLM providers are use
 |---|---|---|
 | `GROQ_API_KEY` | backend `/api/chat` + pipeline fallback | Groq chat completions (OpenAI-compatible SDK) |
 | `GROQ_MODEL` | Groq calls | default `llama-3.3-70b-versatile` |
+| `LLM_PROVIDER` | pipeline + chat | `ollama` = local models (see above); unset = OpenAI/Groq |
 | `OPENAI_API_KEY` | pipeline (`summarize_chunks`, `reduce_notes`, `extract_notes`) | optional; used if set, else Groq fallback |
 | `OPENAI_MODEL` | pipeline | default `gpt-4o-mini` |
 | `OPENAI_BASE_URL` | pipeline | optional; point the OpenAI SDK at a compatible endpoint |

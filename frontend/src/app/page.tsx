@@ -1,10 +1,11 @@
 import Link from "next/link";
 import {
   BookOpen, Sparkles, MessageSquare, Download, Clock, Check, ChevronRight,
-  FileText, ArrowRight, Link2, Cpu, Play,
+  FileText, ArrowRight, Link2, Cpu,
 } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { HeroUrlForm } from "@/components/hero-url-form";
 import { cn } from "@/lib/utils";
 
 const SAMPLE_NOTES = [
@@ -100,18 +101,9 @@ export default function LandingPage() {
             Paste a YouTube link. Get clean, timestamped study notes in minutes — then ask your notes questions.
           </p>
 
-          {/* Fake input -> sign-in */}
-          <Link
-            href="/login"
-            style={{ "--delay": "240ms" } as React.CSSProperties}
-            className="animate-fade-up group mx-auto mt-9 flex max-w-xl items-center gap-2 rounded-full border border-border bg-card/80 p-1.5 pl-5 text-left shadow-lg shadow-primary/5 backdrop-blur transition-all hover:border-primary/40 hover:shadow-primary/15"
-          >
-            <Play className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">https://youtube.com/watch?v=…</span>
-            <span className={cn(buttonVariants({ size: "default" }), "rounded-full px-5 pointer-events-none")}>
-              Get notes <ChevronRight className="ml-1 h-4 w-4" />
-            </span>
-          </Link>
+          <div style={{ "--delay": "240ms" } as React.CSSProperties} className="animate-fade-up mt-9">
+            <HeroUrlForm />
+          </div>
           <p
             style={{ "--delay": "300ms" } as React.CSSProperties}
             className="animate-fade-up mt-4 text-xs text-muted-foreground"

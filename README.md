@@ -108,3 +108,24 @@ working directory:
 Optional visual mode adds `download_video.py` → `extract_slides.py` → `ocr_slides.py`,
 feeding slide OCR text into step 4. `extract_notes.py` is an alternate one-shot path
 (timestamped transcript → single `notes.md`).
+
+## Deployment
+
+The backend and frontend deploy separately.
+
+**Backend (Render, Docker)** — `render.yaml` + `backend/Dockerfile`. Create a Render
+Blueprint from the repo and set `GROQ_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`
+and `FRONTEND_URL` (the Vercel URL, for CORS). The image installs ffmpeg and skips the
+CUDA wheels, so transcription runs on CPU (`WHISPER_DEVICE=cpu`). Ollama is not
+available on a hosted backend; use Groq or OpenAI.
+
+**Frontend (Vercel)** — import the repo with root directory `frontend` and set
+`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `NEXT_PUBLIC_API_URL`
+(the Render URL).
+
+**Supabase** — run `supabase/schema.sql`, then add the Vercel URL under
+Auth → URL Configuration.
+
+Caveats: `backend/outputs/` lives on ephemeral disk and is wiped on redeploy (chat reads
+notes from it; only the `notes` table rows persist), and YouTube may block `yt-dlp`
+requests from datacenter IPs.
