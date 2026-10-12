@@ -11,6 +11,9 @@ import { api, type Run } from "@/lib/api";
 import Link from "next/link";
 import { formatDistanceToNow, differenceInDays } from "date-fns";
 
+// Keep in sync with FREE_TIER_LIMIT in backend/app.py.
+const FREE_LIMIT = 3;
+
 function statusColor(status: Run["status"]) {
   return {
     done: "bg-green-500/10 text-green-600 dark:text-green-400",
@@ -43,6 +46,8 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [url, setUrl] = useState("");
+  const [models, setModels] = useState<string[]>([]);
+  const [model, setModel] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
@@ -69,8 +74,12 @@ export default function DashboardPage() {
     async function load() {
       const token = await getToken();
       try {
-        const data = await api.runs.list(token);
-        setRuns(data);
+        setRuns(await api.runs.list(token));
+      } catch {}
+      try {
+        const m = await api.models(token);
+        setModels(m.models);
+        setModel(m.models.includes(m.default) ? m.default : "");
       } catch {}
       setLoading(false);
     }
@@ -92,7 +101,7 @@ export default function DashboardPage() {
 
     try {
       const token = await getToken();
-      const { run_id } = await api.runs.create(token, url.trim());
+      const { run_id } = await api.runs.create(token, url.trim(), model || undefined);
       setActiveRunId(run_id);
       setUrl("");
 
@@ -165,10 +174,10 @@ export default function DashboardPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Your Videos</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {freeUsed}/3 free videos used this month
+            Turn any YouTube lecture into searchable notes.
           </p>
         </div>
-        <Button onClick={() => setShowModal(true)} disabled={freeUsed >= 3} className="gap-2">
+        <Button onClick={() => setShowModal(true)} disabled={freeUsed >= FREE_LIMIT} className="gap-2">
           <Plus className="h-4 w-4" />
           New video
         </Button>
@@ -178,12 +187,12 @@ export default function DashboardPage() {
       <div className="mb-8 rounded-lg border border-border bg-card p-4">
         <div className="mb-2 flex items-center justify-between text-sm">
           <span className="text-muted-foreground">Free tier usage</span>
-          <span className="font-medium">{freeUsed} / 3 videos</span>
+          <span className="font-medium">{freeUsed} / {FREE_LIMIT} videos this month</span>
         </div>
-        <Progress value={(freeUsed / 3) * 100} className="h-1.5" />
-        {freeUsed >= 3 && (
+        <Progress value={(freeUsed / FREE_LIMIT) * 100} className="h-1.5" />
+        {freeUsed >= FREE_LIMIT && (
           <p className="mt-2 text-xs text-muted-foreground">
-            You&apos;ve used all 3 free videos this month. Upgrade to Pro for unlimited access.
+            You&apos;ve used all {FREE_LIMIT} free videos this month. Upgrade to Pro for unlimited access.
           </p>
         )}
       </div>
@@ -234,19 +243,22 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(run.status)}`}>
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(run.status)} ${run.status === "processing" ? "animate-pulse" : ""}`}>
                     {run.status}
                   </span>
                   {run.status === "done" && (
                     <Link href={`/run/${run.id}`}>
-                      <Button size="sm" variant="ghost" className="gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Button size="sm" variant="ghost" className="gap-1 text-primary">
                         Open <ChevronRight className="h-3 w-3" />
                       </Button>
                     </Link>
                   )}
                   <button
-                    onClick={() => handleDelete(run.id)}
-                    className="rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100 transition-opacity"
+                    onClick={() => {
+                      if (window.confirm("Delete this video and its notes?")) handleDelete(run.id);
+                    }}
+                    aria-label="Delete video"
+                    className="rounded p-1 text-muted-foreground hover:text-destructive md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100 transition-opacity"
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -267,15 +279,31 @@ export default function DashboardPage() {
           {!activeRunId && progress < 100 ? (
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">YouTube URL</label>
+                <label htmlFor="video-url" className="text-sm font-medium">YouTube URL</label>
                 <Input
+                  id="video-url"
+                  type="url"
                   placeholder="https://youtube.com/watch?v=..."
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   required
                   autoFocus
                 />
-                <p className="text-xs text-muted-foreground">Free tier: videos up to 20 minutes.</p>
+                {models.length > 1 && (
+                  <div className="space-y-1.5 pt-1">
+                    <label htmlFor="model" className="text-sm font-medium">Local model</label>
+                    <select
+                      id="model"
+                      value={model}
+                      onChange={(e) => setModel(e.target.value)}
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    >
+                      <option value="">Server default</option>
+                      {models.map((m) => <option key={m} value={m}>{m}</option>)}
+                    </select>
+                  </div>
+                )}
+                <p className="text-xs text-muted-foreground">Free tier: videos up to 20 minutes. Processing usually takes a few minutes.</p>
               </div>
               {runError && (
                 <div className="flex items-start gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">

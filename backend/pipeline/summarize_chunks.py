@@ -160,7 +160,12 @@ def _call_api(client: OpenAI, model: str, prompt: str, max_retries: int = 3) -> 
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,
             )
-            return response.choices[0].message.content or "", response.usage
+            text = response.choices[0].message.content or ""
+            # Small local models occasionally ignore the bullet format; retry once.
+            if attempt == 0 and not any(l.lstrip().startswith("- ") for l in text.splitlines()):
+                print("  Reply had no bullets; retrying once...")
+                continue
+            return text, response.usage
         except Exception as e:
             print(f"  Attempt {attempt + 1} failed: {e}")
             if attempt < max_retries - 1:

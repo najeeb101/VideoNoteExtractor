@@ -53,7 +53,7 @@
   --secondary: oklch(0.96 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.96 0 0);
-  --muted-foreground: oklch(0.58 0 0);
+  --muted-foreground: oklch(0.5 0 0);
   --accent: oklch(0.96 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
@@ -84,7 +84,7 @@
   --secondary: oklch(0.22 0 0);
   --secondary-foreground: oklch(0.92 0 0);
   --muted: oklch(0.22 0 0);
-  --muted-foreground: oklch(0.53 0 0);
+  --muted-foreground: oklch(0.68 0 0);
   --accent: oklch(0.22 0 0);
   --accent-foreground: oklch(0.92 0 0);
   --destructive: oklch(0.704 0.191 22.216);
@@ -111,4 +111,55 @@
   html {
     @apply font-sans;
   }
+}
+
+/* ── Landing page polish ───────────────────────────────────────────────── */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes float-slow {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-8px); }
+}
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+
+@utility animate-fade-up {
+  animation: fade-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: var(--delay, 0ms);
+}
+@utility animate-float-slow {
+  animation: float-slow 6s ease-in-out infinite;
+}
+@utility text-gradient {
+  background-image: linear-gradient(180deg, var(--foreground) 30%, color-mix(in oklab, var(--foreground) 55%, transparent));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+@utility text-gradient-primary {
+  background-image: linear-gradient(90deg, var(--primary), color-mix(in oklab, var(--primary) 45%, oklch(0.75 0.15 300)), var(--primary));
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 8s linear infinite;
+}
+@utility bg-grid {
+  background-image:
+    linear-gradient(to right, color-mix(in oklab, var(--foreground) 6%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklab, var(--foreground) 6%, transparent) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 30%, transparent 75%);
+}
+@utility glass {
+  background: color-mix(in oklab, var(--background) 70%, transparent);
+  backdrop-filter: blur(14px) saturate(1.4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-up, .animate-float-slow, .text-gradient-primary { animation: none !important; }
 }

@@ -44,16 +44,18 @@ export interface ChatMessage {
 export const api = {
   runs: {
     list: (token: string) => apiFetch<Run[]>("/api/runs", token),
-    create: (token: string, url: string) =>
+    create: (token: string, url: string, model?: string) =>
       apiFetch<{ run_id: string }>("/api/run", token, {
         method: "POST",
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url, model }),
       }),
     notes: (token: string, runId: string) =>
       apiFetch<Notes>(`/api/notes/${runId}`, token),
     delete: (token: string, runId: string) =>
       apiFetch<void>(`/api/runs/${runId}`, token, { method: "DELETE" }),
   },
+  models: (token: string) =>
+    apiFetch<{ models: string[]; default: string }>("/api/models", token),
   chat: {
     send: (token: string, runId: string, messages: ChatMessage[]) =>
       fetch(`${API_BASE}/api/chat/${runId}`, {

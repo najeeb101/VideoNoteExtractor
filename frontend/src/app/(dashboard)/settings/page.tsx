@@ -12,8 +12,6 @@ import type { User as SupabaseUser } from "@supabase/supabase-js";
 
 export default function SettingsPage() {
   const [user, setUser] = useState<SupabaseUser | null>(null);
-  const [loading] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState(false);
   const router = useRouter();
   const supabase = createClient();
 
@@ -131,20 +129,11 @@ export default function SettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium">Delete account</p>
-              <p className="text-sm text-muted-foreground">Permanently delete your account and all notes. This cannot be undone.</p>
+              <p className="text-sm text-muted-foreground">Account deletion is not available yet. You can delete individual videos from the dashboard; notes expire after 7 days.</p>
             </div>
-            {!deleteConfirm ? (
-              <Button variant="destructive" size="sm" onClick={() => setDeleteConfirm(true)}>
-                Delete account
-              </Button>
-            ) : (
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" onClick={() => setDeleteConfirm(false)}>Cancel</Button>
-                <Button variant="destructive" size="sm" disabled={loading}>
-                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Confirm delete"}
-                </Button>
-              </div>
-            )}
+            <Button variant="outline" size="sm" disabled title="Not available yet">
+              Delete account
+            </Button>
           </div>
         </div>
       </section>

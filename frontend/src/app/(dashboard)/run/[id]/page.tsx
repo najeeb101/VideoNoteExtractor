@@ -2,13 +2,15 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Copy, Download, Send, Loader2, Bot, User } from "lucide-react";
+import Link from "next/link";
+import { ArrowLeft, Copy, Check, Download, Send, Loader2, Bot, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { createClient } from "@/lib/supabase/client";
 import { api, type Notes, type ChatMessage } from "@/lib/api";
+import { Markdown } from "@/components/markdown";
 import { cn } from "@/lib/utils";
 
 export default function RunPage() {
@@ -19,6 +21,8 @@ export default function RunPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [tab, setTab] = useState("summary");
+  const [copied, setCopied] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const supabase = createClient();
 
@@ -103,6 +107,8 @@ export default function RunPage() {
 
   function copyText(text: string) {
     navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
   }
 
   function downloadMd(content: string, filename: string) {
@@ -131,21 +137,30 @@ export default function RunPage() {
     );
   }
 
+  const tabContent =
+    tab === "chunks" ? notes.chunk_notes_md
+    : tab === "transcript" ? (notes.transcript_timestamped_txt || notes.transcript_txt)
+    : notes.reduced_notes_md;
+  const tabFile = ({ summary: "lectura-summary.md", chunks: "lectura-chunk-notes.md", transcript: "lectura-transcript.md" } as Record<string, string>)[tab] ?? "lectura-notes.md";
+
   return (
     <div className="flex h-full flex-col">
       {/* Top bar */}
       <div className="flex h-14 items-center gap-3 border-b border-border px-6">
-        <Button variant="ghost" size="sm" onClick={() => router.back()} className="gap-1.5 text-muted-foreground">
+        <Link
+          href="/dashboard"
+          className="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
           <ArrowLeft className="h-4 w-4" />
           Dashboard
-        </Button>
+        </Link>
       </div>
 
       {/* Content */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 flex-col overflow-hidden lg:flex-row">
         {/* Notes panel */}
-        <div className="flex w-[55%] flex-col border-r border-border">
-          <Tabs defaultValue="summary" className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col border-b border-border lg:w-[55%] lg:flex-none lg:border-b-0 lg:border-r">
+          <Tabs value={tab} onValueChange={setTab} className="flex flex-1 flex-col overflow-hidden">
             <div className="flex items-center justify-between border-b border-border px-4">
               <TabsList className="h-12 gap-1 bg-transparent p-0">
                 <TabsTrigger value="summary" className="h-10 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none">
@@ -161,15 +176,15 @@ export default function RunPage() {
               <div className="flex gap-1">
                 <Button
                   variant="ghost" size="sm"
-                  onClick={() => copyText(notes.reduced_notes_md)}
+                  onClick={() => copyText(tabContent)}
                   className="gap-1.5 text-muted-foreground"
                 >
-                  <Copy className="h-3.5 w-3.5" />
-                  Copy
+                  {copied ? <Check className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
+                  {copied ? "Copied" : "Copy"}
                 </Button>
                 <Button
                   variant="ghost" size="sm"
-                  onClick={() => downloadMd(notes.reduced_notes_md, "lectura-notes.md")}
+                  onClick={() => downloadMd(tabContent, tabFile)}
                   className="gap-1.5 text-muted-foreground"
                 >
                   <Download className="h-3.5 w-3.5" />
@@ -180,10 +195,10 @@ export default function RunPage() {
 
             <ScrollArea className="flex-1">
               <TabsContent value="summary" className="m-0 p-6">
-                <Prose content={notes.reduced_notes_md} />
+                <Markdown content={notes.reduced_notes_md} />
               </TabsContent>
               <TabsContent value="chunks" className="m-0 p-6">
-                <Prose content={notes.chunk_notes_md} />
+                <Markdown content={notes.chunk_notes_md} />
               </TabsContent>
               <TabsContent value="transcript" className="m-0 p-6">
                 <pre className="whitespace-pre-wrap font-mono text-xs text-muted-foreground leading-relaxed">
@@ -195,7 +210,7 @@ export default function RunPage() {
         </div>
 
         {/* Chat panel */}
-        <div className="flex w-[45%] flex-col">
+        <div className="flex min-h-0 flex-1 flex-col lg:w-[45%] lg:flex-none">
           <div className="flex h-12 items-center border-b border-border px-4">
             <div className="flex items-center gap-2">
               <Bot className="h-4 w-4 text-primary" />
@@ -235,7 +250,9 @@ export default function RunPage() {
                         ? "bg-primary text-primary-foreground"
                         : "bg-muted text-foreground"
                     )}>
-                      {msg.content || (streaming && i === messages.length - 1 ? <span className="animate-pulse">▋</span> : "")}
+                      {msg.content
+                        ? (msg.role === "assistant" ? <Markdown content={msg.content} className="text-foreground" /> : <span className="whitespace-pre-wrap">{msg.content}</span>)
+                        : (streaming && i === messages.length - 1 ? <span className="animate-pulse">▋</span> : "")}
                     </div>
                     {msg.role === "user" && (
                       <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted">
@@ -268,21 +285,6 @@ export default function RunPage() {
           </form>
         </div>
       </div>
-    </div>
-  );
-}
-
-function Prose({ content }: { content: string }) {
-  return (
-    <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:font-semibold prose-headings:tracking-tight prose-p:text-muted-foreground prose-li:text-muted-foreground prose-code:text-xs">
-      {content.split("\n").map((line, i) => {
-        if (line.startsWith("## ")) return <h2 key={i} className="mt-6 mb-2 text-base font-semibold text-foreground">{line.slice(3)}</h2>;
-        if (line.startsWith("### ")) return <h3 key={i} className="mt-4 mb-1.5 text-sm font-semibold text-foreground">{line.slice(4)}</h3>;
-        if (line.startsWith("- ") || line.startsWith("* ")) return <p key={i} className="flex gap-2 text-sm text-muted-foreground"><span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />{line.slice(2)}</p>;
-        if (line.startsWith("**") && line.endsWith("**")) return <p key={i} className="font-medium text-foreground text-sm">{line.slice(2, -2)}</p>;
-        if (line.trim() === "") return <div key={i} className="h-2" />;
-        return <p key={i} className="text-sm text-muted-foreground leading-relaxed">{line}</p>;
-      })}
     </div>
   );
 }

@@ -79,9 +79,10 @@ def preflight_check(args: argparse.Namespace) -> None:
 
     # 1. LLM API key — always required (summarize + reduce both need it).
     #    Either OpenAI or Groq (OpenAI-compatible) works.
-    if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("GROQ_API_KEY"):
+    using_ollama = os.environ.get("LLM_PROVIDER", "").lower() == "ollama"
+    if not using_ollama and not os.environ.get("OPENAI_API_KEY") and not os.environ.get("GROQ_API_KEY"):
         errors.append(
-            "No LLM API key set — need OPENAI_API_KEY or GROQ_API_KEY.\n"
+            "No LLM API key set — need OPENAI_API_KEY or GROQ_API_KEY (or LLM_PROVIDER=ollama).\n"
             "  → Add one to a .env file (copy .env.example) or export it in your shell."
         )
 

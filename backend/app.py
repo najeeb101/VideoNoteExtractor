@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import threading
+import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -255,6 +256,37 @@ app.add_middleware(
 
 class RunRequest(BaseModel):
     url: str
+    model: str | None = None   # local (Ollama) model name; must be one of /api/models
+
+
+OLLAMA_MAX_MODEL_BYTES = 6 * 1024**3
+
+
+def _ollama_models() -> list[str]:
+    """Names of locally installed Ollama chat models (empty if Ollama is off/unreachable)."""
+    if os.environ.get("LLM_PROVIDER", "").lower() != "ollama":
+        return []
+    base = (os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434/v1").removesuffix("/v1")
+    try:
+        with urllib.request.urlopen(f"{base}/api/tags", timeout=3) as r:
+            tags = json.load(r).get("models", [])
+    except Exception:
+        return []
+    # Skip embedding models and anything too big for a typical 8 GB GPU.
+    return sorted(
+        t["name"] for t in tags
+        if "embed" not in t["name"] and t.get("size", 0) <= OLLAMA_MAX_MODEL_BYTES
+    )
+
+
+@app.get("/api/models")
+async def list_models(user=Depends(get_current_user)):
+    loop = asyncio.get_event_loop()
+    models = await loop.run_in_executor(None, _ollama_models)
+    default = os.environ.get("OLLAMA_MODEL") or "lectura-notes"
+    if default not in models and f"{default}:latest" in models:
+        default = f"{default}:latest"
+    return {"models": models, "default": default}
 
 
 @app.post("/api/run")
@@ -262,6 +294,9 @@ async def start_run(body: RunRequest, user=Depends(get_current_user)):
     url = body.url.strip()
     if not url:
         raise HTTPException(400, "URL is required.")
+
+    if body.model and body.model not in await asyncio.get_event_loop().run_in_executor(None, _ollama_models):
+        raise HTTPException(400, "Unknown model.")
 
     # Reject if user already has a run in progress
     for j in jobs.values():
@@ -322,6 +357,7 @@ async def start_run(body: RunRequest, user=Depends(get_current_user)):
         "PYTHONUNBUFFERED": "1",
         "PYTHONUTF8": "1",           # steps print ✓/→/… — force UTF-8, not cp1252
         "PYTHONIOENCODING": "utf-8",
+        **({"OLLAMA_MODEL": body.model} if body.model else {}),
     }
     proc = subprocess.Popen(
         cmd,
