@@ -138,8 +138,9 @@ Output rules:
 - No boilerplate, no intro/outro, no "this summary..." lines.
 - Keep bullets concrete; bold key terms like **this**.
 - Preserve important examples as bullets under the relevant section.
-- Each input bullet ends with a [HH:MM:SS] timestamp. KEEP it at the end of the merged bullet
-  (when merging bullets, keep the earliest timestamp).
+- End every bullet with exactly one timestamp in square brackets, like: ... text [00:01:23]
+  Take it from the input bullets; when several bullets merge into one, use the earliest.
+  Never wrap a timestamp in parentheses and never write the word "timestamp".
 - Use ONLY information present in the bullets. Do not add facts, causes, or filler.
 
 Bullet points to consolidate:
@@ -162,6 +163,7 @@ Output rules:
 - Deduplicate aggressively and remove any repeated or near-duplicate points.
 - No boilerplate, no intro/outro, no separators.
 - Keep the [HH:MM:SS] timestamp at the end of every bullet that has one; never remove or invent timestamps.
+- Write timestamps only as [HH:MM:SS] (no parentheses, never the word "timestamp").
 - Use ONLY information present in the partial outlines. Do not add new facts.
 
 Partial outlines:

@@ -123,4 +123,6 @@ FastAPI, thread-per-job model. `/api/run` spawns `run_pipeline.py` as a subproce
 
 ### Frontend (`frontend/src/`)
 
-Next.js App Router. Route groups `(auth)` (login) and `(dashboard)` (dashboard, `run/[id]`, settings). All backend calls go through the typed `api` object in `lib/api.ts` (fetch + SSE `EventSource`). Supabase clients are split browser (`lib/supabase/client.ts`) / server (`server.ts`) / middleware (`middleware.ts`); session refresh runs in `proxy.ts`. UI is shadcn components under `components/ui/`.
+Next.js App Router. Route groups `(auth)` (login) and `(dashboard)` (dashboard, `run/[id]`, settings). All backend calls go through the typed `api` object in `lib/api.ts` (fetch + SSE `EventSource`). Supabase clients are split browser (`lib/supabase/client.ts`) / server (`server.ts`) / middleware (`middleware.ts`); session refresh runs in `proxy.ts`. UI is shadcn components under `components/ui/` (Base UI primitives: active tabs use `data-active`, not Radix's `data-state`).
+
+The run page (`run/[id]`) composes `components/run/*`: an embedded YouTube player (`youtube-player.tsx`, IFrame API) whose `seekTo` is passed as `onSeek` to `components/markdown.tsx`, so `[HH:MM:SS]` chips seek the player (modified clicks still open YouTube). Chapters come from the chunk-note headings (`lib/notes.ts`). Chat sits under the player on desktop and in a tab on mobile (`lib/use-media-query.ts`), so only one `ChatPanel` is ever mounted. Printing uses `print-view.tsx`, a portal into `<body>`.

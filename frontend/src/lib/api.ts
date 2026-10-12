@@ -44,6 +44,7 @@ export interface ChatMessage {
 export const api = {
   runs: {
     list: (token: string) => apiFetch<Run[]>("/api/runs", token),
+    get: (token: string, runId: string) => apiFetch<Run>(`/api/runs/${runId}`, token),
     create: (token: string, url: string, model?: string) =>
       apiFetch<{ run_id: string }>("/api/run", token, {
         method: "POST",

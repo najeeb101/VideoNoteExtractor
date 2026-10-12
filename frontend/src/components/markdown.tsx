@@ -1,41 +1,40 @@
 import { Fragment, type ReactNode } from "react";
+import { MessageSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { tsToSeconds, youtubeUrlAt } from "@/lib/youtube";
 
 // Minimal Markdown renderer for pipeline notes and chat replies: headings,
 // (nested) bullets, numbered items, tables, code blocks, quotes, and inline
 // **bold**, *italic*, `code`, <br>, plus [HH:MM:SS] timestamps rendered as chips
-// (linking into the video when `videoUrl` is given). No dependency needed.
+// (linking into the video when `videoUrl` is given; `onSeek` makes a plain click
+// play the embedded player instead). No dependency needed.
+
+interface Options {
+  videoUrl?: string;
+  onSeek?: (seconds: number) => void;
+}
 
 // A timestamp is [HH:MM:SS] or a range like [00:00:00 - 00:02:39].
 const TS = String.raw`\d{1,2}:\d{2}(?::\d{2})?`;
-const INLINE_RE = new RegExp(String.raw`(\*\*[^*]+\*\*|\x60[^\x60]+\x60|\*[^*\s][^*]*\*|\[${TS}(?:\s*[-–]\s*${TS})?\]|<br\s*\/?>)`, "gi");
-const TIMESTAMP_RE = new RegExp(String.raw`^\[(${TS})(?:\s*[-–]\s*(${TS}))?\]$`);
+const INLINE_RE = new RegExp(String.raw`(\*\*[^*]+\*\*|\x60[^\x60]+\x60|\*[^*\s][^*]*\*|\[${TS}(?:\s*[-‐‑‒–—]\s*${TS})?\]|<br\s*\/?>)`, "gi");
+const TIMESTAMP_RE = new RegExp(String.raw`^\[(${TS})(?:\s*[-‐‑‒–—]\s*(${TS}))?\]$`);
 const BR_RE = /^<br\s*\/?>$/i;
 const TABLE_SEP_RE = /^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?$/;
-
-// YouTube link that starts playback at `ts`; null for anything that isn't YouTube.
-function videoAt(videoUrl: string | undefined, ts: string): string | null {
-  if (!videoUrl) return null;
-  try {
-    const url = new URL(videoUrl);
-    if (!/(^|\.)(youtube\.com|youtu\.be)$/.test(url.hostname)) return null;
-    const seconds = ts.split(":").reduce((acc, n) => acc * 60 + Number(n), 0);
-    url.searchParams.set("t", `${seconds}s`);
-    return url.toString();
-  } catch {
-    return null;
-  }
-}
+// "( [00:00:42] )", "( [a]–[b] )" or "(earliest timestamp [a])" -> just the timestamp(s)
+const PAREN_TS_RE = new RegExp(
+  String.raw`\(\s*(?:earliest\s+timestamp\s*)?((?:\[${TS}(?:\s*[-‐‑‒–—]\s*${TS})?\]\s*[-‐‑‒–—,]?\s*)+)\)`,
+  "gi"
+);
 
 const CHIP = "ml-1 whitespace-nowrap rounded bg-primary/10 px-1.5 py-0.5 align-middle font-mono text-[0.7rem] text-primary";
 
-function Inline({ text, videoUrl }: { text: string; videoUrl?: string }) {
-  const parts = text.split(INLINE_RE).filter(Boolean);
+function Inline({ text, opts }: { text: string; opts: Options }) {
+  const parts = text.replace(PAREN_TS_RE, (_, ts: string) => ts.trim()).split(INLINE_RE).filter(Boolean);
   return (
     <>
       {parts.map((part, i) => {
         if (part.startsWith("**") && part.endsWith("**") && part.length > 4)
-          return <strong key={i} className="font-semibold text-foreground"><Inline text={part.slice(2, -2)} videoUrl={videoUrl} /></strong>;
+          return <strong key={i} className="font-semibold text-foreground"><Inline text={part.slice(2, -2)} opts={opts} /></strong>;
         if (part.startsWith("`") && part.endsWith("`") && part.length > 2)
           return <code key={i} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] text-foreground">{part.slice(1, -1)}</code>;
         if (part.startsWith("*") && part.endsWith("*") && part.length > 2)
@@ -44,14 +43,22 @@ function Inline({ text, videoUrl }: { text: string; videoUrl?: string }) {
         const ts = part.match(TIMESTAMP_RE);
         if (ts) {
           const label = ts[2] ? `${ts[1]}–${ts[2]}` : ts[1];
-          const href = videoAt(videoUrl, ts[1]);
+          const seconds = tsToSeconds(ts[1]);
+          const href = youtubeUrlAt(opts.videoUrl, seconds);
+          const { onSeek } = opts;
           return href ? (
             <a
               key={i}
               href={href}
               target="_blank"
               rel="noopener noreferrer"
-              title="Open the video at this moment"
+              title={onSeek ? "Play from here" : "Open the video at this moment"}
+              onClick={onSeek && ((e) => {
+                // Modified clicks still open YouTube in a new tab.
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+                e.preventDefault();
+                onSeek(seconds);
+              })}
               className={cn(CHIP, "transition-colors hover:bg-primary/20")}
             >
               {label}
@@ -70,10 +77,25 @@ function splitRow(row: string): string[] {
   return row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
 }
 
-export function Markdown({ content, className, videoUrl }: { content: string; className?: string; videoUrl?: string }) {
+// Heading text without markdown or timestamps, for the "Ask" prompt.
+function plainHeading(text: string) {
+  return text.replace(INLINE_RE, (m) => (TIMESTAMP_RE.test(m) ? "" : m.replace(/[*`]/g, ""))).trim();
+}
+
+export function Markdown({
+  content, className, videoUrl, onSeek, onAskHeading,
+}: {
+  content: string;
+  className?: string;
+  videoUrl?: string;
+  onSeek?: (seconds: number) => void;
+  /** Adds an "Ask" button to each heading. */
+  onAskHeading?: (heading: string) => void;
+}) {
   const lines = content.split("\n").map((l) => l.replace(/\s+$/, ""));
   const blocks: ReactNode[] = [];
-  const inline = (text: string) => <Inline text={text} videoUrl={videoUrl} />;
+  const opts: Options = { videoUrl, onSeek };
+  const inline = (text: string) => <Inline text={text} opts={opts} />;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -134,11 +156,20 @@ export function Markdown({ content, className, videoUrl }: { content: string; cl
         <h3
           key={i}
           className={cn(
-            "font-semibold tracking-tight text-foreground",
+            "group font-semibold tracking-tight text-foreground",
             level <= 1 ? "pt-2 text-lg" : level === 2 ? "pt-5 text-base" : "pt-3 text-sm"
           )}
         >
           {inline(heading[2])}
+          {onAskHeading && (
+            <button
+              type="button"
+              onClick={() => onAskHeading(plainHeading(heading[2]))}
+              className="ml-2 inline-flex items-center gap-1 rounded px-1.5 py-0.5 align-middle text-xs font-normal text-muted-foreground transition-opacity hover:bg-muted hover:text-foreground md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100 print:hidden"
+            >
+              <MessageSquare className="h-3 w-3" /> Ask
+            </button>
+          )}
         </h3>
       );
       continue;
