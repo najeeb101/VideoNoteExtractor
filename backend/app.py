@@ -191,10 +191,12 @@ def _read_subprocess_output(job: RunJob) -> None:
     finally:
         job.process.wait()
         job.exit_code = job.process.returncode
-        job.log_queue.put(None)  # sentinel
-
-        # Update run status + save notes to Supabase
-        _on_pipeline_complete(job)
+        try:
+            # Persist before signalling: the client reloads the run list as soon
+            # as it sees "done", so the DB status must already be updated.
+            _on_pipeline_complete(job)
+        finally:
+            job.log_queue.put(None)  # sentinel
 
 
 def _on_pipeline_complete(job: RunJob) -> None:

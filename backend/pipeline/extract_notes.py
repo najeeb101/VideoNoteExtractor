@@ -37,7 +37,7 @@ def extract_notes(transcript_path: str, output_path: str = "notes.md"):
     with open(transcript_path, "r", encoding="utf-8") as f:
         transcript_text = f.read()
 
-    from _llm import make_client_and_model
+    from _llm import completion_kwargs, make_client_and_model
     client, model_name = make_client_and_model()
 
     prompt = (
@@ -63,6 +63,7 @@ def extract_notes(transcript_path: str, output_path: str = "notes.md"):
             model=model_name,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
+            **completion_kwargs(model_name),
         )
     except Exception as e:
         print(f"\n[!] Error calling OpenAI API: {e}")

@@ -84,12 +84,19 @@ def _pack_batches(lines: Iterable[str], max_chars: int) -> List[str]:
 
 
 def _chat(client: OpenAI, model: str, user_prompt: str) -> str:
+    from _llm import completion_kwargs
     resp = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": user_prompt}],
         temperature=0.2,
+        **completion_kwargs(model),
     )
-    return resp.choices[0].message.content or ""
+    choice = resp.choices[0]
+    text = (choice.message.content or "").strip()
+    if not text:
+        # Fail the run rather than feed an empty outline into the next call.
+        raise RuntimeError(f"LLM returned no content (finish_reason={choice.finish_reason}).")
+    return text
 
 
 def reduce_notes(input_path: str = "chunk_notes.md", output_path: str = "notes_reduced.md") -> str:
