@@ -34,7 +34,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-8">
+    <div className="mx-auto max-w-2xl px-4 py-6 sm:px-6 sm:py-8">
       <div className="mb-8">
         <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
         <p className="mt-1 text-sm text-muted-foreground">Manage your account and preferences.</p>
@@ -42,13 +42,13 @@ export default function SettingsPage() {
 
       {/* Profile */}
       <section className="rounded-lg border border-border bg-card">
-        <div className="border-b border-border px-6 py-4">
+        <div className="border-b border-border px-4 py-4 sm:px-6">
           <div className="flex items-center gap-2">
             <User className="h-4 w-4 text-muted-foreground" />
             <h2 className="font-medium">Profile</h2>
           </div>
         </div>
-        <div className="space-y-4 p-6">
+        <div className="space-y-4 p-4 sm:p-6">
           <div className="space-y-1.5">
             <Label>Email</Label>
             <Input value={user.email ?? ""} readOnly className="bg-muted/30 text-muted-foreground" />
@@ -68,14 +68,14 @@ export default function SettingsPage() {
 
       {/* Plan */}
       <section className="mt-4 rounded-lg border border-border bg-card">
-        <div className="border-b border-border px-6 py-4">
+        <div className="border-b border-border px-4 py-4 sm:px-6">
           <div className="flex items-center gap-2">
             <Shield className="h-4 w-4 text-muted-foreground" />
             <h2 className="font-medium">Plan</h2>
           </div>
         </div>
-        <div className="p-6">
-          <div className="flex items-center justify-between">
+        <div className="p-4 sm:p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-medium">Free tier</span>
@@ -87,7 +87,7 @@ export default function SettingsPage() {
                 <li>Notes deleted after 7 days</li>
               </ul>
             </div>
-            <Button disabled variant="outline" className="gap-2">
+            <Button disabled variant="outline" className="shrink-0 gap-2 self-start sm:self-auto">
               Upgrade to Pro
               <Badge className="ml-1 text-[10px]">Soon</Badge>
             </Button>
@@ -97,14 +97,14 @@ export default function SettingsPage() {
 
       {/* Auth */}
       <section className="mt-4 rounded-lg border border-border bg-card">
-        <div className="border-b border-border px-6 py-4">
+        <div className="border-b border-border px-4 py-4 sm:px-6">
           <div className="flex items-center gap-2">
             <Mail className="h-4 w-4 text-muted-foreground" />
             <h2 className="font-medium">Authentication</h2>
           </div>
         </div>
-        <div className="p-6">
-          <div className="flex items-center justify-between">
+        <div className="p-4 sm:p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-medium">Signed in as</p>
               <p className="text-sm text-muted-foreground">{user.email}</p>
@@ -112,26 +112,26 @@ export default function SettingsPage() {
                 via {user.app_metadata?.provider ?? "email"}
               </p>
             </div>
-            <Button variant="outline" onClick={handleSignOut}>Sign out</Button>
+            <Button variant="outline" onClick={handleSignOut} className="shrink-0 self-start sm:self-auto">Sign out</Button>
           </div>
         </div>
       </section>
 
       {/* Danger zone */}
       <section className="mt-4 rounded-lg border border-destructive/30 bg-card">
-        <div className="border-b border-destructive/20 px-6 py-4">
+        <div className="border-b border-destructive/20 px-4 py-4 sm:px-6">
           <div className="flex items-center gap-2">
             <Trash2 className="h-4 w-4 text-destructive" />
             <h2 className="font-medium text-destructive">Danger zone</h2>
           </div>
         </div>
-        <div className="p-6">
-          <div className="flex items-center justify-between">
+        <div className="p-4 sm:p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-medium">Delete account</p>
               <p className="text-sm text-muted-foreground">Account deletion is not available yet. You can delete individual videos from the dashboard; notes expire after 7 days.</p>
             </div>
-            <Button variant="outline" size="sm" disabled title="Not available yet">
+            <Button variant="outline" size="sm" disabled title="Not available yet" className="shrink-0 self-start sm:self-auto">
               Delete account
             </Button>
           </div>

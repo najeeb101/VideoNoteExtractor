@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, LayoutDashboard, Settings, LogOut, Moon, Sun } from "lucide-react";
+import { BookOpen, Home, LayoutDashboard, Settings, LogOut, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -13,13 +13,14 @@ import type { User } from "@supabase/supabase-js";
 import { cn } from "@/lib/utils";
 
 const navItems = [
+  { href: "/", icon: Home, label: "Home" },
   { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/settings", icon: Settings, label: "Settings" },
 ];
 
 export function Sidebar({ user }: { user: User }) {
   const pathname = usePathname();
-  const { theme, setTheme } = useTheme();
+  const { resolvedTheme, setTheme } = useTheme();
   const router = useRouter();
   const supabase = createClient();
 
@@ -33,10 +34,10 @@ export function Sidebar({ user }: { user: User }) {
   return (
     <aside className="flex h-full w-14 shrink-0 flex-col md:w-56 border-r border-border bg-sidebar">
       {/* Logo */}
-      <div className="flex h-14 items-center gap-2 border-b border-sidebar-border px-4">
+      <Link href="/" aria-label="Lectura home" className="flex h-14 items-center gap-2 border-b border-sidebar-border px-4 transition-opacity hover:opacity-80">
         <BookOpen className="h-5 w-5 text-primary" />
         <span className="hidden font-semibold text-sidebar-foreground md:inline">Lectura</span>
-      </div>
+      </Link>
 
       {/* Nav */}
       <nav className="flex-1 space-y-0.5 p-2 pt-3">
@@ -46,7 +47,8 @@ export function Sidebar({ user }: { user: User }) {
             href={href}
             className={cn(
               "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors",
-              pathname.startsWith(href)
+              (href === "/" ? pathname === "/" : pathname.startsWith(href)) ||
+                (href === "/dashboard" && pathname.startsWith("/run"))
                 ? "bg-sidebar-accent text-sidebar-foreground font-medium"
                 : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
             )}
@@ -60,11 +62,17 @@ export function Sidebar({ user }: { user: User }) {
       {/* Bottom */}
       <div className="border-t border-sidebar-border p-3 space-y-1">
         <button
-          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+          onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
           className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
         >
-          {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          <span className="hidden md:inline">{theme === "dark" ? "Light mode" : "Dark mode"}</span>
+          {/* Icon and label switch via the `dark` class, not JS state: the server
+              can't know the theme, so reading it during render breaks hydration. */}
+          <Sun className="hidden h-4 w-4 dark:block" />
+          <Moon className="h-4 w-4 dark:hidden" />
+          <span className="hidden md:inline">
+            <span className="dark:hidden">Dark mode</span>
+            <span className="hidden dark:inline">Light mode</span>
+          </span>
         </button>
         <button
           onClick={handleSignOut}
