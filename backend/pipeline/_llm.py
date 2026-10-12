@@ -47,7 +47,7 @@ def make_client_and_model():
 
     groq_key = os.environ.get("GROQ_API_KEY")
     if groq_key:
-        model = model or os.environ.get("GROQ_MODEL") or "llama-3.3-70b-versatile"
+        model = model or os.environ.get("GROQ_MODEL") or "openai/gpt-oss-120b"
         client = OpenAI(api_key=groq_key, base_url=base_url or GROQ_BASE_URL)
         print(f"[*] LLM: Groq ({model})")
         return client, model

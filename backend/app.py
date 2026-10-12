@@ -560,7 +560,7 @@ async def chat(run_id: str, body: ChatRequest, user=Depends(get_current_user)):
         # Larger-context variant of the pipeline model; see backend/ollama/Modelfile.chat
         model = os.environ.get("OLLAMA_CHAT_MODEL", "lectura-chat")
     else:
-        model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+        model = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
     token_q: asyncio.Queue = asyncio.Queue()
 
     def _stream():

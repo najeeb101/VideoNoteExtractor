@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository layout
 
-This is a two-part monorepo. Product name in the UI/API is **Lectura**; the repo/CLI name is **VideoNoteExtractor**. LLM providers: the backend chat always uses **Groq** (`llama-3.3-70b-versatile`); the pipeline uses **OpenAI** if `OPENAI_API_KEY` is set, otherwise it **falls back to Groq** automatically (`backend/pipeline/_llm.py`). Running everything on a single Groq key requires no OpenAI account.
+This is a two-part monorepo. Product name in the UI/API is **Lectura**; the repo/CLI name is **VideoNoteExtractor**. LLM providers: the backend chat always uses **Groq** (`openai/gpt-oss-120b`); the pipeline uses **OpenAI** if `OPENAI_API_KEY` is set, otherwise it **falls back to Groq** automatically (`backend/pipeline/_llm.py`). Running everything on a single Groq key requires no OpenAI account.
 
 - **`backend/`** — Python. `app.py` (FastAPI server) + `pipeline/` (the note-extraction steps). Local pipeline outputs land in `backend/outputs/{run-id}/`.
 - **`frontend/`** — Next.js 16 (App Router, React 19, Tailwind v4, shadcn) + Supabase auth. Talks to the backend over HTTP/SSE.
@@ -75,7 +75,7 @@ Copy `.env.example` to `.env` (repo root). **Two different LLM providers are use
 | Variable | Used by | Purpose |
 |---|---|---|
 | `GROQ_API_KEY` | backend `/api/chat` + pipeline fallback | Groq chat completions (OpenAI-compatible SDK) |
-| `GROQ_MODEL` | Groq calls | default `llama-3.3-70b-versatile` |
+| `GROQ_MODEL` | Groq calls | default `openai/gpt-oss-120b` |
 | `LLM_PROVIDER` | pipeline + chat | `ollama` = local models (see above); unset = OpenAI/Groq |
 | `OPENAI_API_KEY` | pipeline (`summarize_chunks`, `reduce_notes`, `extract_notes`) | optional; used if set, else Groq fallback |
 | `OPENAI_MODEL` | pipeline | default `gpt-4o-mini` |
