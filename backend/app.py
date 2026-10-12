@@ -43,6 +43,15 @@ STATIC_DIR   = REPO_ROOT / "static"
 FREE_TIER_LIMIT        = 3        # max runs per calendar month
 FREE_TIER_MAX_DURATION = 1200     # 20 minutes in seconds
 
+# Pipeline output file -> column in the Supabase `notes` table.
+NOTE_FILES = [
+    ("chunk_notes.md",             "chunk_notes_md"),
+    ("notes_reduced.md",           "reduced_notes_md"),
+    ("transcript.txt",             "transcript_txt"),
+    ("transcript_timestamped.txt", "transcript_timestamped_txt"),
+]
+MEDIA_FILES = ("audio.mp3", "video.mp4")
+
 DOWNLOAD_ALLOWLIST = {
     "chunk_notes.md",
     "notes_reduced.md",
@@ -219,26 +228,22 @@ def _on_pipeline_complete(job: RunJob) -> None:
         return
 
     run_dir = OUTPUTS_DIR / job.run_id
-    note_data: dict = {}
-    for fname, key in [
-        ("chunk_notes.md",             "chunk_notes_md"),
-        ("notes_reduced.md",           "reduced_notes_md"),
-        ("transcript.txt",             "transcript_txt"),
-        ("transcript_timestamped.txt", "transcript_timestamped_txt"),
-    ]:
-        p = run_dir / fname
-        if p.exists():
-            note_data[key] = p.read_text(encoding="utf-8")
+    note_data = _read_note_files(run_dir)
+    if not note_data:
+        return
+    try:
+        sb.table("notes").insert({
+            "run_id":  job.run_id,
+            "user_id": job.user_id,
+            **note_data,
+        }).execute()
+    except Exception as exc:
+        print(f"[db] failed to save notes: {exc}")
+        return
 
-    if note_data:
-        try:
-            sb.table("notes").insert({
-                "run_id":  job.run_id,
-                "user_id": job.user_id,
-                **note_data,
-            }).execute()
-        except Exception as exc:
-            print(f"[db] failed to save notes: {exc}")
+    # Notes now live in Supabase; drop the downloaded media (tens of MB per run).
+    for fname in MEDIA_FILES:
+        (run_dir / fname).unlink(missing_ok=True)
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -468,33 +473,63 @@ def _safe_run_dir(run_id: str) -> Path:
     return candidate
 
 
-def _assert_run_owner(run_id: str, user_id: str) -> None:
+def _assert_run_owner(run_id: str, user_id: str) -> dict:
+    """Return the run row if `user_id` owns it; 404 if missing, 403 if not theirs."""
+    try:
+        uuid.UUID(run_id)
+    except ValueError:
+        raise HTTPException(404, "Run not found.")
     sb = _get_supabase()
     if not sb:
-        return
-    result = sb.table("runs").select("user_id").eq("id", run_id).single().execute()
-    if not result.data or result.data["user_id"] != user_id:
+        return {}
+    rows = sb.table("runs").select("*").eq("id", run_id).limit(1).execute().data
+    if not rows:
+        raise HTTPException(404, "Run not found.")
+    if rows[0]["user_id"] != user_id:
         raise HTTPException(403, "Access denied.")
+    return rows[0]
+
+
+def _read_note_files(run_dir: Path) -> dict:
+    return {
+        key: (run_dir / fname).read_text(encoding="utf-8")
+        for fname, key in NOTE_FILES
+        if (run_dir / fname).exists()
+    }
+
+
+def _load_notes(run_id: str) -> dict:
+    """Notes for a run, from the Supabase `notes` row: the backend's local disk
+    is ephemeral on hosts like Render. Falls back to the local output files when
+    there's no row (Supabase not configured, or the save failed)."""
+    sb = _get_supabase()
+    if sb:
+        rows = (
+            sb.table("notes")
+            .select(", ".join(key for _, key in NOTE_FILES))
+            .eq("run_id", run_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if rows:
+            return {k: v for k, v in rows[0].items() if v}
+    return _read_note_files(_safe_run_dir(run_id))
+
+
+@app.get("/api/runs/{run_id}")
+async def get_run(run_id: str, user=Depends(get_current_user)):
+    run = _assert_run_owner(run_id, user.id)
+    if not run:
+        raise HTTPException(404, "Run not found.")
+    return run
 
 
 @app.get("/api/notes/{run_id}")
 async def get_notes(run_id: str, user=Depends(get_current_user)):
     _assert_run_owner(run_id, user.id)
-    run_dir = _safe_run_dir(run_id)
-    if not run_dir.exists():
-        raise HTTPException(404, "Run directory not found.")
-
-    result: dict = {}
-    for fname, key in [
-        ("chunk_notes.md",             "chunk_notes_md"),
-        ("notes_reduced.md",           "reduced_notes_md"),
-        ("transcript.txt",             "transcript_txt"),
-        ("transcript_timestamped.txt", "transcript_timestamped_txt"),
-    ]:
-        p = run_dir / fname
-        if p.exists():
-            result[key] = p.read_text(encoding="utf-8")
-
+    result = _load_notes(run_id)
     if not result:
         raise HTTPException(404, "No notes generated yet.")
     return result
@@ -544,7 +579,6 @@ class ChatRequest(BaseModel):
 @app.post("/api/chat/{run_id}")
 async def chat(run_id: str, body: ChatRequest, user=Depends(get_current_user)):
     _assert_run_owner(run_id, user.id)
-    run_dir = _safe_run_dir(run_id)
 
     use_ollama = os.environ.get("LLM_PROVIDER", "").lower() == "ollama"
     api_key = os.environ.get("GROQ_API_KEY")
@@ -553,15 +587,11 @@ async def chat(run_id: str, body: ChatRequest, user=Depends(get_current_user)):
 
     loop = asyncio.get_event_loop()
 
-    reduced_notes = ""
-    rn = run_dir / "notes_reduced.md"
-    if rn.exists():
-        reduced_notes = rn.read_text(encoding="utf-8")[:5_000]
-
-    cn = run_dir / "chunk_notes.md"
+    notes = _load_notes(run_id)
+    reduced_notes = notes.get("reduced_notes_md", "")[:5_000]
     # Local models have a much smaller context window than Groq's.
     chunk_limit = 24_000 if use_ollama else 80_000
-    chunk_notes = cn.read_text(encoding="utf-8")[:chunk_limit] if cn.exists() else ""
+    chunk_notes = notes.get("chunk_notes_md", "")[:chunk_limit]
     if not chunk_notes and not reduced_notes:
         raise HTTPException(404, "No notes available for this run.")
     context = f"DETAILED NOTES:\n{chunk_notes}\n\nOUTLINE:\n{reduced_notes}"

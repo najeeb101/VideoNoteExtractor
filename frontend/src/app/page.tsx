@@ -232,12 +232,12 @@ export default async function LandingPage() {
           <div className="grid gap-5 sm:grid-cols-2">
             <PlanCard
               name="Free" price="$0" blurb="Perfect for trying it out."
-              features={["3 videos per month", "Up to 20 min per video", "Notes kept for 7 days", "Markdown export", "Chat with your notes"]}
+              features={["3 videos per month", "Up to 20 min per video", "Notes kept until you delete them", "Share links", "Markdown export", "Chat with your notes"]}
               action={<Link href="/login" className={cn(buttonVariants({ variant: "outline" }), "h-10 w-full rounded-full")}>Get started free</Link>}
             />
             <PlanCard
               name="Pro" price="$9" blurb="For serious learners." highlight
-              features={["Unlimited videos", "Up to 2 hours per video", "Notes kept forever", "Public share links", "Priority processing", "Everything in Free"]}
+              features={["Unlimited videos", "Up to 2 hours per video", "Priority processing", "Everything in Free"]}
               action={<span className={cn(buttonVariants(), "pointer-events-none h-10 w-full rounded-full opacity-50")}>Coming soon</span>}
             />
           </div>

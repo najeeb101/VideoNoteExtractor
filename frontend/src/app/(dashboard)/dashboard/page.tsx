@@ -10,7 +10,7 @@ import { createClient } from "@/lib/supabase/client";
 import { PENDING_URL_KEY } from "@/components/hero-url-form";
 import { api, type Run } from "@/lib/api";
 import Link from "next/link";
-import { formatDistanceToNow, differenceInDays } from "date-fns";
+import { formatDistanceToNow } from "date-fns";
 import { cn } from "@/lib/utils";
 
 function statusColor(status: Run["status"]) {
@@ -250,7 +250,6 @@ export default function DashboardPage() {
       ) : (
         <div className="space-y-2">
           {runs.map((run) => {
-            const daysLeft = differenceInDays(new Date(run.expires_at), new Date());
             return (
               <div key={run.id} className="group flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-3 hover:border-primary/20 transition-colors sm:gap-4 sm:px-4">
                 {run.thumbnail_url ? (
@@ -275,11 +274,6 @@ export default function DashboardPage() {
                       {formatDuration(run.duration_seconds)}
                     </span>
                     <span>{formatDistanceToNow(new Date(run.created_at), { addSuffix: true })}</span>
-                    {run.status === "done" && daysLeft >= 0 && (
-                      <span className={daysLeft <= 1 ? "text-red-500" : ""}>
-                        expires in {daysLeft}d
-                      </span>
-                    )}
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-1 sm:gap-2">

@@ -125,18 +125,8 @@ create policy "Users can delete own outputs"
   );
 
 -- ============================================================
--- Cleanup cron — deletes expired runs daily
--- Requires pg_cron extension (enable in Supabase dashboard)
+-- Retention: notes are kept until the user deletes the run.
+-- runs.expires_at is still populated but not enforced; there is
+-- no cleanup job. (The backend deletes each run's downloaded
+-- audio/video once its notes are saved.)
 -- ============================================================
-
--- Enable extension (run once):
--- create extension if not exists pg_cron;
-
--- Schedule: delete runs where expires_at has passed
--- select cron.schedule(
---   'delete-expired-runs',
---   '0 3 * * *',  -- every day at 3am UTC
---   $$
---     delete from public.runs where expires_at < now();
---   $$
--- );

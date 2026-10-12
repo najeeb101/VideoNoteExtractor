@@ -84,7 +84,7 @@ export default function SettingsPage() {
               <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
                 <li>3 videos per month</li>
                 <li>Up to 20 minutes per video</li>
-                <li>Notes deleted after 7 days</li>
+                <li>Notes kept until you delete them</li>
               </ul>
             </div>
             <Button disabled variant="outline" className="shrink-0 gap-2 self-start sm:self-auto">
@@ -129,7 +129,7 @@ export default function SettingsPage() {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-medium">Delete account</p>
-              <p className="text-sm text-muted-foreground">Account deletion is not available yet. You can delete individual videos from the dashboard; notes expire after 7 days.</p>
+              <p className="text-sm text-muted-foreground">Account deletion is not available yet. You can delete individual videos from the dashboard.</p>
             </div>
             <Button variant="outline" size="sm" disabled title="Not available yet" className="shrink-0 self-start sm:self-auto">
               Delete account

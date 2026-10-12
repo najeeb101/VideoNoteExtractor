@@ -115,11 +115,11 @@ FastAPI, thread-per-job model. `/api/run` spawns `run_pipeline.py` as a subproce
 
 - **Auth**: every endpoint depends on a Supabase JWT — `Authorization: Bearer` header for normal calls, `?token=` query param for SSE (`EventSource` can't set headers).
 - **Free tier**: `FREE_TIER_LIMIT` runs/calendar-month and `FREE_TIER_MAX_DURATION` (20 min, checked via a yt-dlp metadata probe) enforced in `/api/run`. Concurrent runs by the same user are rejected (HTTP 409). Usage is counted from the `run_usage` table (service-role only, no RLS policies), not `runs`: users can delete their own `runs` rows, which would refund quota. `GET /api/usage` feeds the dashboard's usage bar.
-- **Persistence**: on completion, `_on_pipeline_complete` updates the `runs` row and inserts generated notes into the `notes` table.
-- **Chat** (`/api/chat/{run_id}`): stuffs `chunk_notes.md` (≤80k chars) + `notes_reduced.md` (≤5k) into the system prompt and streams a Groq answer. (No embeddings/RAG — Groq has no embeddings API, and a ≤20-min free-tier video's notes fit comfortably in context.)
+- **Persistence**: on completion, `_on_pipeline_complete` updates the `runs` row, inserts generated notes into the `notes` table, then deletes the run's `audio.mp3`/`video.mp4`. The Supabase `notes` row is the source of truth: `/api/notes` and chat read it via `_load_notes` (local files are only a fallback), because the backend's disk is ephemeral on Render. Notes are kept until the user deletes the run; `runs.expires_at` is not enforced.
+- **Chat** (`/api/chat/{run_id}`): stuffs the run's chunk notes (≤80k chars) + reduced notes (≤5k) into the system prompt and streams a Groq answer. (No embeddings/RAG — Groq has no embeddings API, and a ≤20-min free-tier video's notes fit comfortably in context.)
 - **Safety**: `_safe_run_dir` validates run dirs stay under `outputs/`; downloads gated to `DOWNLOAD_ALLOWLIST`; `_assert_run_owner` checks ownership against Supabase.
 
-`app.py` invokes `run_pipeline.py` with `--run-id <uuid>` and `cwd=backend/`, so outputs land in `backend/outputs/{uuid}/` — the same `OUTPUTS_DIR` the server reads notes back from. The subprocess's stdout markers (`[OK] Pre-flight checks passed`, `$ …` step lines, `[OK] Pipeline complete.`) are what `STEP_PATTERNS` keys progress off of, so keep those strings in sync if you touch either side.
+`app.py` invokes `run_pipeline.py` with `--run-id <uuid>` and `cwd=backend/`, so outputs land in `backend/outputs/{uuid}/` (`OUTPUTS_DIR`), where `_on_pipeline_complete` picks them up. The subprocess's stdout markers (`[OK] Pre-flight checks passed`, `$ …` step lines, `[OK] Pipeline complete.`) are what `STEP_PATTERNS` keys progress off of, so keep those strings in sync if you touch either side.
 
 ### Frontend (`frontend/src/`)
 
