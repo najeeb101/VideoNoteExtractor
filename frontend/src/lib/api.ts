@@ -27,6 +27,7 @@ export interface Run {
   created_at: string;
   expires_at: string;
   thumbnail_url?: string;
+  share_token?: string | null;
 }
 
 export interface Notes {
@@ -34,6 +35,37 @@ export interface Notes {
   reduced_notes_md: string;
   transcript_txt: string;
   transcript_timestamped_txt: string;
+}
+
+export interface StudyPack {
+  tldr: string;
+  chapters: { part: number; title: string }[];
+  key_terms: { term: string; definition: string; timestamp: string }[];
+  flashcards: { front: string; back: string; timestamp: string }[];
+  quiz: { question: string; options: string[]; answer_index: number; explanation: string; timestamp: string }[];
+}
+
+export interface MyNotes {
+  body: string;
+  starred: string[];
+}
+
+export interface SearchResult {
+  run_id: string;
+  title: string;
+  /** ts_headline fragment; matches are wrapped in << >>. */
+  snippet: string;
+  rank: number;
+}
+
+/** Public, read-only notes behind a share link. */
+export interface SharedNotes {
+  title: string;
+  url: string;
+  duration_seconds: number | null;
+  reduced_notes_md: string;
+  chunk_notes_md: string;
+  study: StudyPack | null;
 }
 
 export interface ChatMessage {
@@ -54,6 +86,25 @@ export const api = {
       apiFetch<Notes>(`/api/notes/${runId}`, token),
     delete: (token: string, runId: string) =>
       apiFetch<void>(`/api/runs/${runId}`, token, { method: "DELETE" }),
+    study: (token: string, runId: string) =>
+      apiFetch<StudyPack>(`/api/study/${runId}`, token),
+    myNotes: (token: string, runId: string) =>
+      apiFetch<MyNotes>(`/api/runs/${runId}/my-notes`, token),
+    saveMyNotes: (token: string, runId: string, update: Partial<MyNotes>) =>
+      apiFetch<MyNotes>(`/api/runs/${runId}/my-notes`, token, { method: "PUT", body: JSON.stringify(update) }),
+    share: (token: string, runId: string) =>
+      apiFetch<{ share_token: string }>(`/api/runs/${runId}/share`, token, { method: "POST" }),
+    unshare: (token: string, runId: string) =>
+      apiFetch<{ ok: boolean }>(`/api/runs/${runId}/share`, token, { method: "DELETE" }),
+  },
+  search: (token: string, q: string) =>
+    apiFetch<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}`, token),
+  /** No auth: anyone with the link can read shared notes. Null if the link is invalid or revoked. */
+  shared: async (shareToken: string): Promise<SharedNotes | null> => {
+    const res = await fetch(`${API_BASE}/api/share/${encodeURIComponent(shareToken)}`, { cache: "no-store" });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`Request failed (${res.status})`);
+    return res.json();
   },
   usage: (token: string) =>
     apiFetch<{ used: number; limit: number }>("/api/usage", token),

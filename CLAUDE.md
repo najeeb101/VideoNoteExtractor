@@ -106,6 +106,8 @@ YouTube URL / local video
 
 `extract_notes.py` is an alternate one-shot path: timestamped transcript → single structured `notes.md`, not part of `run_pipeline.py`'s default flow.
 
+`study_pack.py` is not part of `run_pipeline.py` either. The backend calls `build_study_pack()` after a run (and lazily from `GET /api/study`). It makes one JSON-mode LLM call returning a TL;DR, a title per chunk part (chapters), key terms, flashcards and a quiz, validated with pydantic, and the result is cached in `notes.study_json`. It sends only the chunk notes: adding the outline overflowed Groq's free tier (8k tokens/minute per request).
+
 - **`summarize_chunks.py`** — sequential mode (default) passes the last 30 bullets as `recent_bullets` context to reduce cross-chunk repetition; parallel mode (`SUMMARIZE_WORKERS>1`, `ThreadPoolExecutor`) drops that context.
 - **`reduce_notes.py`** — map-reduce: batch bullets by `REDUCE_BATCH_CHARS`, condense each batch (map), merge partials in a final call (reduce).
 
@@ -117,6 +119,13 @@ FastAPI, thread-per-job model. `/api/run` spawns `run_pipeline.py` as a subproce
 - **Free tier**: `FREE_TIER_LIMIT` runs/calendar-month and `FREE_TIER_MAX_DURATION` (20 min, checked via a yt-dlp metadata probe) enforced in `/api/run`. Concurrent runs by the same user are rejected (HTTP 409). Usage is counted from the `run_usage` table (service-role only, no RLS policies), not `runs`: users can delete their own `runs` rows, which would refund quota. `GET /api/usage` feeds the dashboard's usage bar.
 - **Persistence**: on completion, `_on_pipeline_complete` updates the `runs` row, inserts generated notes into the `notes` table, then deletes the run's `audio.mp3`/`video.mp4`. The Supabase `notes` row is the source of truth: `/api/notes` and chat read it via `_load_notes` (local files are only a fallback), because the backend's disk is ephemeral on Render. Notes are kept until the user deletes the run; `runs.expires_at` is not enforced.
 - **Chat** (`/api/chat/{run_id}`): stuffs the run's chunk notes (≤80k chars) + reduced notes (≤5k) into the system prompt and streams a Groq answer. (No embeddings/RAG — Groq has no embeddings API, and a ≤20-min free-tier video's notes fit comfortably in context.)
+- **Study & personal data**:
+  - `GET /api/study/{id}`: the study pack, generated once under a per-run lock.
+  - `GET`/`PUT /api/runs/{id}/my-notes`: personal notes and starred bullet keys, in the `user_notes` table.
+  - `GET /api/search?q=`: calls the `search_notes` Postgres function (full text over `notes.search_tsv`).
+  - `POST`/`DELETE /api/runs/{id}/share`: sets `runs.share_token`.
+  - `GET /api/share/{token}` is the only unauthenticated endpoint. It returns notes and study pack, never the transcript or user data.
+  - `user_notes`, `run_usage` and `search_notes` are service-role only: no RLS policies or execute grants.
 - **Safety**: `_safe_run_dir` validates run dirs stay under `outputs/`; downloads gated to `DOWNLOAD_ALLOWLIST`; `_assert_run_owner` checks ownership against Supabase.
 
 `app.py` invokes `run_pipeline.py` with `--run-id <uuid>` and `cwd=backend/`, so outputs land in `backend/outputs/{uuid}/` (`OUTPUTS_DIR`), where `_on_pipeline_complete` picks them up. The subprocess's stdout markers (`[OK] Pre-flight checks passed`, `$ …` step lines, `[OK] Pipeline complete.`) are what `STEP_PATTERNS` keys progress off of, so keep those strings in sync if you touch either side.

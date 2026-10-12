@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode } from "react";
-import { MessageSquare } from "lucide-react";
+import { MessageSquare, Star } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { bulletKey } from "@/lib/notes";
 import { tsToSeconds, youtubeUrlAt } from "@/lib/youtube";
 
 // Minimal Markdown renderer for pipeline notes and chat replies: headings,
@@ -83,7 +84,7 @@ function plainHeading(text: string) {
 }
 
 export function Markdown({
-  content, className, videoUrl, onSeek, onAskHeading,
+  content, className, videoUrl, onSeek, onAskHeading, starred, onToggleStar,
 }: {
   content: string;
   className?: string;
@@ -91,6 +92,10 @@ export function Markdown({
   onSeek?: (seconds: number) => void;
   /** Adds an "Ask" button to each heading. */
   onAskHeading?: (heading: string) => void;
+  /** Keys (lib/notes bulletKey) of starred bullets. */
+  starred?: Set<string>;
+  /** Adds a star toggle to each bullet. */
+  onToggleStar?: (key: string) => void;
 }) {
   const lines = content.split("\n").map((l) => l.replace(/\s+$/, ""));
   const blocks: ReactNode[] = [];
@@ -186,10 +191,26 @@ export function Markdown({
     const bullet = line.match(/^(\s*)[-*+•]\s+(.*)$/);
     if (bullet) {
       const depth = Math.min(Math.floor(bullet[1].length / 2), 3);
+      const key = onToggleStar ? bulletKey(bullet[2]) : "";
+      const isStarred = !!starred?.has(key);
       blocks.push(
-        <div key={i} className="flex gap-2.5" style={{ paddingLeft: depth * 16 }}>
+        <div key={i} className="group/bullet flex gap-2.5" style={{ paddingLeft: depth * 16 }}>
           <span className="mt-[0.55rem] h-1.5 w-1.5 shrink-0 rounded-full bg-primary/70" />
-          <p className="min-w-0">{inline(bullet[2])}</p>
+          <p className="min-w-0 flex-1">{inline(bullet[2])}</p>
+          {onToggleStar && (
+            <button
+              type="button"
+              onClick={() => onToggleStar(key)}
+              aria-label={isStarred ? "Unstar" : "Star"}
+              aria-pressed={isStarred}
+              className={cn(
+                "mt-0.5 h-6 w-6 shrink-0 rounded text-muted-foreground transition-opacity hover:text-amber-500 print:hidden",
+                isStarred ? "text-amber-500" : "md:opacity-0 md:group-hover/bullet:opacity-100 md:focus-visible:opacity-100"
+              )}
+            >
+              <Star className={cn("mx-auto h-3.5 w-3.5", isStarred && "fill-current")} />
+            </button>
+          )}
         </div>
       );
       continue;

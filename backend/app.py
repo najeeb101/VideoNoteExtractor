@@ -28,6 +28,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from pipeline._llm import completion_kwargs
+from pipeline.study_pack import build_study_pack
 
 try:
     from dotenv import load_dotenv
@@ -210,6 +211,14 @@ def _read_subprocess_output(job: RunJob) -> None:
             _on_pipeline_complete(job)
         finally:
             job.log_queue.put(None)  # sentinel
+
+        # Pre-generate the study pack so the notes page has it on first open.
+        # Best effort: GET /api/study generates it lazily if this fails.
+        if job.exit_code == 0 and job.user_id:
+            try:
+                _ensure_study_pack(job.run_id)
+            except (Exception, SystemExit) as exc:
+                print(f"[study] pre-generation failed for {job.run_id}: {exc!r}")
 
 
 def _on_pipeline_complete(job: RunJob) -> None:
@@ -564,6 +573,168 @@ async def delete_run(run_id: str, user=Depends(get_current_user)):
         shutil.rmtree(run_dir, ignore_errors=True)
     jobs.pop(run_id, None)
     return {"ok": True}
+
+
+# ── Study pack ────────────────────────────────────────────────────────────────
+
+_study_locks: dict[str, threading.Lock] = {}
+_study_locks_guard = threading.Lock()
+
+
+def _latest_notes_row(run_id: str, columns: str) -> dict:
+    rows = (
+        _get_supabase().table("notes").select(columns).eq("run_id", run_id)
+        .order("created_at", desc=True).limit(1).execute().data
+    )
+    return rows[0] if rows else {}
+
+
+def _ensure_study_pack(run_id: str) -> dict | None:
+    """The run's cached study pack, generated and saved on first use.
+    A per-run lock keeps concurrent requests from generating it twice."""
+    with _study_locks_guard:
+        lock = _study_locks.setdefault(run_id, threading.Lock())
+    with lock:
+        sb = _get_supabase()
+        if sb:
+            cached = _latest_notes_row(run_id, "study_json").get("study_json")
+            if cached:
+                return cached
+        notes = _load_notes(run_id)
+        if not notes.get("chunk_notes_md") and not notes.get("reduced_notes_md"):
+            return None
+        pack = build_study_pack(notes.get("chunk_notes_md", ""), notes.get("reduced_notes_md", ""))
+        if sb:
+            sb.table("notes").update({"study_json": pack}).eq("run_id", run_id).execute()
+        return pack
+
+
+@app.get("/api/study/{run_id}")
+async def get_study_pack(run_id: str, user=Depends(get_current_user)):
+    _assert_run_owner(run_id, user.id)
+    loop = asyncio.get_event_loop()
+    try:
+        pack = await loop.run_in_executor(None, _ensure_study_pack, run_id)
+    except (Exception, SystemExit) as exc:  # LLM errors and rate limits; SystemExit = no API key
+        print(f"[study] {run_id}: {exc!r}")
+        raise HTTPException(503, "Couldn't generate study material right now. Try again in a minute.")
+    if pack is None:
+        raise HTTPException(404, "No notes available for this run.")
+    return pack
+
+
+# ── Personal notes & stars ────────────────────────────────────────────────────
+
+MY_NOTES_MAX_CHARS = 50_000
+MY_NOTES_MAX_STARS = 500
+
+
+class MyNotesUpdate(BaseModel):
+    body: str | None = None
+    starred: list[str] | None = None
+
+
+@app.get("/api/runs/{run_id}/my-notes")
+async def get_my_notes(run_id: str, user=Depends(get_current_user)):
+    _assert_run_owner(run_id, user.id)
+    rows = (
+        _get_supabase().table("user_notes").select("body, starred")
+        .eq("run_id", run_id).eq("user_id", user.id).limit(1).execute().data
+    )
+    return rows[0] if rows else {"body": "", "starred": []}
+
+
+@app.put("/api/runs/{run_id}/my-notes")
+async def put_my_notes(run_id: str, body: MyNotesUpdate, user=Depends(get_current_user)):
+    _assert_run_owner(run_id, user.id)
+    if body.body is not None and len(body.body) > MY_NOTES_MAX_CHARS:
+        raise HTTPException(413, f"Notes are limited to {MY_NOTES_MAX_CHARS:,} characters.")
+    if body.starred is not None and (
+        len(body.starred) > MY_NOTES_MAX_STARS or any(len(k) > 32 for k in body.starred)
+    ):
+        raise HTTPException(400, "Invalid starred list.")
+    sb = _get_supabase()
+    existing = (
+        sb.table("user_notes").select("body, starred")
+        .eq("run_id", run_id).eq("user_id", user.id).limit(1).execute().data
+    )
+    row = existing[0] if existing else {"body": "", "starred": []}
+    if body.body is not None:
+        row["body"] = body.body
+    if body.starred is not None:
+        row["starred"] = list(dict.fromkeys(body.starred))
+    sb.table("user_notes").upsert({
+        "run_id": run_id,
+        "user_id": user.id,
+        **row,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }, on_conflict="run_id,user_id").execute()
+    return row
+
+
+# ── Search ────────────────────────────────────────────────────────────────────
+
+@app.get("/api/search")
+async def search_notes(q: str = Query(default=""), user=Depends(get_current_user)):
+    q = q.strip()[:200]
+    if len(q) < 2:
+        return []
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None, lambda: _get_supabase().rpc("search_notes", {"uid": user.id, "q": q}).execute()
+    )
+    return result.data or []
+
+
+# ── Share links ───────────────────────────────────────────────────────────────
+
+@app.post("/api/runs/{run_id}/share")
+async def create_share_link(run_id: str, user=Depends(get_current_user)):
+    run = _assert_run_owner(run_id, user.id)
+    if run.get("status") != "done":
+        raise HTTPException(400, "Only finished videos can be shared.")
+    token = run.get("share_token")
+    if not token:
+        token = str(uuid.uuid4())
+        _get_supabase().table("runs").update({"share_token": token}).eq("id", run_id).execute()
+    return {"share_token": token}
+
+
+@app.delete("/api/runs/{run_id}/share")
+async def revoke_share_link(run_id: str, user=Depends(get_current_user)):
+    _assert_run_owner(run_id, user.id)
+    _get_supabase().table("runs").update({"share_token": None}).eq("id", run_id).execute()
+    return {"ok": True}
+
+
+@app.get("/api/share/{token}")
+async def get_shared_notes(token: str):
+    """Public, read-only notes for a share link. No auth; no transcript or user info."""
+    try:
+        uuid.UUID(token)
+    except ValueError:
+        raise HTTPException(404, "Link not found.")
+    sb = _get_supabase()
+    if not sb:
+        raise HTTPException(404, "Link not found.")
+    rows = (
+        sb.table("runs").select("id, title, url, duration_seconds")
+        .eq("share_token", token).eq("status", "done").limit(1).execute().data
+    )
+    if not rows:
+        raise HTTPException(404, "Link not found.")
+    run = rows[0]
+    notes = _latest_notes_row(run["id"], "reduced_notes_md, chunk_notes_md, study_json")
+    if not notes:
+        raise HTTPException(404, "Link not found.")
+    return {
+        "title": run["title"],
+        "url": run["url"],
+        "duration_seconds": run["duration_seconds"],
+        "reduced_notes_md": notes.get("reduced_notes_md") or "",
+        "chunk_notes_md": notes.get("chunk_notes_md") or "",
+        "study": notes.get("study_json"),
+    }
 
 
 # ── /api/chat/{run_id} ────────────────────────────────────────────────────────

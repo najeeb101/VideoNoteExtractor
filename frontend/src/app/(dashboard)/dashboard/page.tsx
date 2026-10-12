@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Progress } from "@/components/ui/progress";
 import { createClient } from "@/lib/supabase/client";
 import { PENDING_URL_KEY } from "@/components/hero-url-form";
+import { NotesSearch } from "@/components/dashboard/notes-search";
 import { api, type Run } from "@/lib/api";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
@@ -248,6 +249,7 @@ export default function DashboardPage() {
           </Button>
         </div>
       ) : (
+        <NotesSearch>
         <div className="space-y-2">
           {runs.map((run) => {
             return (
@@ -301,6 +303,7 @@ export default function DashboardPage() {
             );
           })}
         </div>
+        </NotesSearch>
       )}
 
       {/* New run modal */}
