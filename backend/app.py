@@ -97,6 +97,10 @@ def _validate_token(token: str):
         resp = sb.auth.get_user(token)
         if not resp.user:
             raise HTTPException(401, "Invalid or expired token.")
+        # Anonymous sign-ins (enabled project-wide for other apps) carry the
+        # `authenticated` role; without this check anyone could mint free runs.
+        if getattr(resp.user, "is_anonymous", False):
+            raise HTTPException(403, "Anonymous sessions are not allowed. Sign in with an account.")
         return resp.user
     except HTTPException:
         raise
