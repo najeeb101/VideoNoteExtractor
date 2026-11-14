@@ -6,7 +6,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -u 1000 user
+RUN useradd -m -u 1000 user \
+    && mkdir -p /app && chown user:user /app
 USER user
 ENV HOME=/home/user \
     PATH=/home/user/.local/bin:$PATH \
