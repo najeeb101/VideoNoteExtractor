@@ -1,122 +1,123 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Copy, Check, Download, Send, Loader2, Bot, User } from "lucide-react";
+import { ArrowLeft, ExternalLink, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ChatPanel, type ChatHandle } from "@/components/run/chat-panel";
+import { Chapters, chapterAt, type Chapter } from "@/components/run/chapters";
+import { ExportMenu } from "@/components/run/export-menu";
+import { MyNotesPanel } from "@/components/run/my-notes-panel";
+import {
+  NotesContent, chapterTitles, notesMarkdown, type LoadState, type NotesView,
+} from "@/components/run/notes-content";
+import { PrintView } from "@/components/run/print-view";
+import { ShareDialog } from "@/components/run/share-dialog";
+import { StudyPanel } from "@/components/run/study-panel";
+import { YouTubePlayer, type YouTubePlayerHandle } from "@/components/run/youtube-player";
 import { createClient } from "@/lib/supabase/client";
-import { api, type Notes, type ChatMessage } from "@/lib/api";
-import { Markdown } from "@/components/markdown";
-import { cn } from "@/lib/utils";
+import { api, type MyNotes, type Notes, type Run, type StudyPack } from "@/lib/api";
+import { parseParts } from "@/lib/notes";
+import { useMediaQuery } from "@/lib/use-media-query";
+import { formatClock, youtubeId } from "@/lib/youtube";
+
+// Underlined tabs flush with the bottom of the header bar.
+const TAB_TRIGGER = "h-full flex-none px-3 after:bg-primary group-data-horizontal/tabs:after:bottom-0";
+
+async function accessToken() {
+  const { data } = await createClient().auth.getSession();
+  return data.session?.access_token ?? "";
+}
 
 export default function RunPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const isDesktop = useMediaQuery("(min-width: 1024px)", true);
+  const [run, setRun] = useState<Run | null>(null);
   const [notes, setNotes] = useState<Notes | null>(null);
   const [loading, setLoading] = useState(true);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState("");
-  const [streaming, setStreaming] = useState(false);
-  const [tab, setTab] = useState("summary");
-  const [copied, setCopied] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
-  const supabase = createClient();
+  const [study, setStudy] = useState<StudyPack | null>(null);
+  const [studyStatus, setStudyStatus] = useState<LoadState>("loading");
+  // Personal notes + stars; null when unavailable (then stars and "My notes" are hidden).
+  const [mine, setMine] = useState<MyNotes | null>(null);
+  const [view, setView] = useState<NotesView>("summary");
+  const [tab, setTab] = useState("notes");
+  const [chapterIdx, setChapterIdx] = useState(-1);
+  const playerRef = useRef<YouTubePlayerHandle>(null);
+  const chatRef = useRef<ChatHandle>(null);
 
-  async function getToken() {
-    const { data } = await supabase.auth.getSession();
-    return data.session?.access_token ?? "";
-  }
-
-  useEffect(() => {
-    async function load() {
-      const token = await getToken();
-      try {
-        const data = await api.runs.notes(token, id);
-        setNotes(data);
-      } catch {}
-      setLoading(false);
+  const loadStudy = useCallback(async () => {
+    setStudyStatus("loading");
+    try {
+      setStudy(await api.runs.study(await accessToken(), id));
+      setStudyStatus("ready");
+    } catch {
+      setStudyStatus("error");
     }
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  async function sendMessage(e: React.FormEvent) {
-    e.preventDefault();
-    if (!input.trim() || streaming) return;
-
-    const userMsg: ChatMessage = { role: "user", content: input.trim() };
-    setMessages((prev) => [...prev, userMsg]);
-    setInput("");
-    setStreaming(true);
-
-    const token = await getToken();
-    const res = await api.chat.send(token, id, [...messages, userMsg]);
-
-    if (!res.body) { setStreaming(false); return; }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let assistantContent = "";
-
-    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
-
-    const paint = () =>
-      setMessages((prev) => {
-        const updated = [...prev];
-        updated[updated.length - 1] = { role: "assistant", content: assistantContent };
-        return updated;
-      });
-
-    // The backend streams SSE frames: `data: {"token"|"error"|"done": ...}\n\n`
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      const frames = buffer.split("\n\n");
-      buffer = frames.pop() ?? "";
-
-      for (const frame of frames) {
-        const line = frame.trim();
-        if (!line.startsWith("data:")) continue;
-        try {
-          const obj = JSON.parse(line.slice(5).trim());
-          if (obj.token) {
-            assistantContent += obj.token;
-            paint();
-          } else if (obj.error) {
-            assistantContent += `\n\n_[Error: ${obj.error}]_`;
-            paint();
-          }
-        } catch {
-          // ignore keep-alive / partial frames
-        }
+    async function load() {
+      const token = await accessToken();
+      const [runRes, notesRes, mineRes] = await Promise.allSettled([
+        api.runs.get(token, id),
+        api.runs.notes(token, id),
+        api.runs.myNotes(token, id),
+      ]);
+      if (runRes.status === "fulfilled") setRun(runRes.value);
+      if (mineRes.status === "fulfilled") setMine(mineRes.value);
+      if (notesRes.status === "fulfilled") {
+        setNotes(notesRes.value);
+        if (!notesRes.value.reduced_notes_md) setView("detailed");
       }
+      setLoading(false);
+      if (notesRes.status === "fulfilled") loadStudy();
     }
-    setStreaming(false);
+    load();
+  }, [id, loadStudy]);
+
+  const videoId = youtubeId(run?.url);
+  const chapters: Chapter[] = useMemo(() => {
+    const titles = chapterTitles(study);
+    return parseParts(notes?.chunk_notes_md).map((p) => ({ start: p.start, title: titles[p.index] ?? `Part ${p.index + 1}` }));
+  }, [notes, study]);
+  const starred = useMemo(() => new Set(mine?.starred ?? []), [mine]);
+
+  const seek = useCallback((seconds: number) => playerRef.current?.seekTo(seconds), []);
+  const onSeek = videoId ? seek : undefined;
+  const onTime = useCallback((t: number) => setChapterIdx(chapterAt(chapters, t)), [chapters]);
+
+  const saveBody = useCallback(async (body: string) => {
+    await api.runs.saveMyNotes(await accessToken(), id, { body });
+  }, [id]);
+
+  async function toggleStar(key: string) {
+    if (!mine) return;
+    const before = mine;
+    const next = starred.has(key) ? mine.starred.filter((k) => k !== key) : [...mine.starred, key];
+    setMine({ ...mine, starred: next });
+    try {
+      await api.runs.saveMyNotes(await accessToken(), id, { starred: next });
+    } catch {
+      setMine(before);
+    }
   }
 
-  function copyText(text: string) {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+  function askAbout(heading: string) {
+    if (!isDesktop) setTab("chat");
+    chatRef.current?.ask(`Explain more about "${heading}"`);
   }
 
-  function downloadMd(content: string, filename: string) {
-    const blob = new Blob([content], { type: "text/markdown" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    a.click();
+  async function share() {
+    const { share_token } = await api.runs.share(await accessToken(), id);
+    setRun((r) => (r ? { ...r, share_token } : r));
+  }
+  async function unshare() {
+    await api.runs.unshare(await accessToken(), id);
+    setRun((r) => (r ? { ...r, share_token: null } : r));
   }
 
   if (loading) {
@@ -132,159 +133,137 @@ export default function RunPage() {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 text-muted-foreground">
         <p>Notes not found or still processing.</p>
-        <Button variant="outline" size="sm" onClick={() => router.back()}>Go back</Button>
+        <Button variant="outline" size="sm" onClick={() => router.push("/dashboard")}>Back to dashboard</Button>
       </div>
     );
   }
 
-  const tabContent =
-    tab === "chunks" ? notes.chunk_notes_md
-    : tab === "transcript" ? (notes.transcript_timestamped_txt || notes.transcript_txt)
-    : notes.reduced_notes_md;
-  const tabFile = ({ summary: "lectura-summary.md", chunks: "lectura-chunk-notes.md", transcript: "lectura-transcript.md" } as Record<string, string>)[tab] ?? "lectura-notes.md";
+  const title = run?.title || run?.url || "Lecture notes";
+  const reducedMd = notes.reduced_notes_md ?? "";
+  const chunkMd = notes.chunk_notes_md ?? "";
+  const markdown = notesMarkdown(view, reducedMd, chunkMd, study, starred);
+  const activeTab = (isDesktop && tab === "chat") || (!mine && tab === "mine") ? "notes" : tab;
+
+  const player = videoId && (
+    <YouTubePlayer ref={playerRef} videoId={videoId} onTime={onTime} className="shrink-0" />
+  );
+  const chat = (
+    <ChatPanel ref={chatRef} runId={id} videoUrl={run?.url} onSeek={onSeek} className="min-h-0 flex-1" />
+  );
+
+  const mainTabs = (
+    <Tabs value={activeTab} onValueChange={(v) => setTab(String(v))} className="flex min-h-0 flex-1 flex-col gap-0">
+      <div className="flex h-12 shrink-0 items-center border-b border-border px-2 sm:px-4">
+        <TabsList variant="line" className="h-12 gap-0 overflow-x-auto p-0 group-data-horizontal/tabs:h-12">
+          <TabsTrigger value="notes" className={TAB_TRIGGER}>Notes</TabsTrigger>
+          <TabsTrigger value="study" className={TAB_TRIGGER}>Study</TabsTrigger>
+          {mine && <TabsTrigger value="mine" className={TAB_TRIGGER}>My notes</TabsTrigger>}
+          {!isDesktop && <TabsTrigger value="chat" className={TAB_TRIGGER}>Chat</TabsTrigger>}
+        </TabsList>
+      </div>
+
+      <TabsContent value="notes" className="flex min-h-0 flex-col">
+        <ScrollArea className="min-h-0 flex-1">
+          <NotesContent
+            view={view}
+            onViewChange={setView}
+            reducedMd={reducedMd}
+            chunkMd={chunkMd}
+            study={study}
+            studyStatus={studyStatus}
+            videoUrl={run?.url}
+            onSeek={onSeek}
+            onAskHeading={askAbout}
+            starred={mine ? starred : undefined}
+            onToggleStar={mine ? toggleStar : undefined}
+          />
+        </ScrollArea>
+      </TabsContent>
+      <TabsContent value="study" className="flex min-h-0 flex-col">
+        <ScrollArea className="min-h-0 flex-1">
+          <StudyPanel study={study} status={studyStatus} onRetry={loadStudy} videoUrl={run?.url} onSeek={onSeek} />
+        </ScrollArea>
+      </TabsContent>
+      {mine && (
+        <TabsContent value="mine" keepMounted className="flex min-h-0 flex-col">
+          <MyNotesPanel initialBody={mine.body} onSave={saveBody} />
+        </TabsContent>
+      )}
+      {!isDesktop && (
+        <TabsContent value="chat" keepMounted className="flex min-h-0 flex-col">
+          {chat}
+        </TabsContent>
+      )}
+    </Tabs>
+  );
 
   return (
     <div className="flex h-full flex-col">
       {/* Top bar */}
-      <div className="flex h-14 items-center gap-3 border-b border-border px-6">
+      <div className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-3 sm:px-6">
         <Link
           href="/dashboard"
-          className="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          aria-label="Back to dashboard"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <ArrowLeft className="h-4 w-4" />
-          Dashboard
+          <span className="hidden sm:inline">Dashboard</span>
         </Link>
+        <span className="text-muted-foreground/40">/</span>
+        <h1 className="min-w-0 truncate text-sm font-medium" title={title}>{title}</h1>
+        {run?.duration_seconds ? (
+          <span className="hidden shrink-0 font-mono text-xs text-muted-foreground sm:inline">{formatClock(run.duration_seconds)}</span>
+        ) : null}
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          {run?.url && !videoId && (
+            <a
+              href={run.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Watch</span>
+            </a>
+          )}
+          {run && <ShareDialog shareToken={run.share_token ?? null} onShare={share} onUnshare={unshare} />}
+          <ExportMenu
+            title={title}
+            markdown={markdown}
+            viewName={view}
+            transcript={notes.transcript_timestamped_txt || notes.transcript_txt}
+          />
+        </div>
       </div>
 
-      {/* Content */}
-      <div className="flex flex-1 flex-col overflow-hidden lg:flex-row">
-        {/* Notes panel */}
-        <div className="flex min-h-0 flex-1 flex-col border-b border-border lg:w-[55%] lg:flex-none lg:border-b-0 lg:border-r">
-          <Tabs value={tab} onValueChange={setTab} className="flex flex-1 flex-col overflow-hidden">
-            <div className="flex items-center justify-between border-b border-border px-4">
-              <TabsList className="h-12 gap-1 bg-transparent p-0">
-                <TabsTrigger value="summary" className="h-10 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none">
-                  Summary
-                </TabsTrigger>
-                <TabsTrigger value="chunks" className="h-10 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none">
-                  Chunk Notes
-                </TabsTrigger>
-                <TabsTrigger value="transcript" className="h-10 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none">
-                  Transcript
-                </TabsTrigger>
-              </TabsList>
-              <div className="flex gap-1">
-                <Button
-                  variant="ghost" size="sm"
-                  onClick={() => copyText(tabContent)}
-                  className="gap-1.5 text-muted-foreground"
-                >
-                  {copied ? <Check className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
-                  {copied ? "Copied" : "Copy"}
-                </Button>
-                <Button
-                  variant="ghost" size="sm"
-                  onClick={() => downloadMd(tabContent, tabFile)}
-                  className="gap-1.5 text-muted-foreground"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  Export
-                </Button>
-              </div>
-            </div>
-
-            <ScrollArea className="flex-1">
-              <TabsContent value="summary" className="m-0 p-6">
-                <Markdown content={notes.reduced_notes_md} />
-              </TabsContent>
-              <TabsContent value="chunks" className="m-0 p-6">
-                <Markdown content={notes.chunk_notes_md} />
-              </TabsContent>
-              <TabsContent value="transcript" className="m-0 p-6">
-                <pre className="whitespace-pre-wrap font-mono text-xs text-muted-foreground leading-relaxed">
-                  {notes.transcript_timestamped_txt || notes.transcript_txt}
-                </pre>
-              </TabsContent>
-            </ScrollArea>
-          </Tabs>
-        </div>
-
-        {/* Chat panel */}
-        <div className="flex min-h-0 flex-1 flex-col lg:w-[45%] lg:flex-none">
-          <div className="flex h-12 items-center border-b border-border px-4">
-            <div className="flex items-center gap-2">
-              <Bot className="h-4 w-4 text-primary" />
-              <span className="text-sm font-medium">Chat with your notes</span>
-            </div>
-          </div>
-
-          <ScrollArea className="flex-1 p-4">
-            {messages.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center gap-3 py-16 text-center">
-                <Bot className="h-8 w-8 text-muted-foreground/40" />
-                <p className="text-sm text-muted-foreground">Ask anything about the video</p>
-                <div className="space-y-2">
-                  {["Summarize the key points", "What are the main takeaways?", "Explain the most complex concept"].map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => setInput(s)}
-                      className="block w-full rounded-md border border-border bg-card px-3 py-2 text-left text-xs text-muted-foreground hover:border-primary/30 hover:text-foreground transition-colors"
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {messages.map((msg, i) => (
-                  <div key={i} className={cn("flex gap-2.5", msg.role === "user" ? "justify-end" : "justify-start")}>
-                    {msg.role === "assistant" && (
-                      <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10">
-                        <Bot className="h-3.5 w-3.5 text-primary" />
-                      </div>
-                    )}
-                    <div className={cn(
-                      "max-w-[85%] rounded-lg px-3 py-2 text-sm",
-                      msg.role === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted text-foreground"
-                    )}>
-                      {msg.content
-                        ? (msg.role === "assistant" ? <Markdown content={msg.content} className="text-foreground" /> : <span className="whitespace-pre-wrap">{msg.content}</span>)
-                        : (streaming && i === messages.length - 1 ? <span className="animate-pulse">▋</span> : "")}
-                    </div>
-                    {msg.role === "user" && (
-                      <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted">
-                        <User className="h-3.5 w-3.5 text-muted-foreground" />
-                      </div>
-                    )}
-                  </div>
-                ))}
-                <div ref={chatEndRef} />
-              </div>
-            )}
-          </ScrollArea>
-
-          <form onSubmit={sendMessage} className="border-t border-border p-4">
-            <div className="flex gap-2">
-              <Textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Ask about the video…"
-                className="min-h-[40px] max-h-32 resize-none text-sm"
-                rows={1}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(e); }
-                }}
+      {isDesktop ? (
+        <div className="flex min-h-0 flex-1">
+          <section className="flex min-w-0 flex-1 flex-col">{mainTabs}</section>
+          <aside className="flex w-[40%] min-w-[360px] max-w-[560px] shrink-0 flex-col border-l border-border">
+            {player}
+            {player && (
+              <Chapters
+                chapters={chapters}
+                current={chapterIdx}
+                onSeek={seek}
+                layout="list"
+                className="max-h-[28vh] shrink-0 overflow-y-auto border-b border-border"
               />
-              <Button type="submit" size="icon" disabled={!input.trim() || streaming} className="shrink-0">
-                {streaming ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              </Button>
-            </div>
-          </form>
+            )}
+            {chat}
+          </aside>
         </div>
-      </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col">
+          {player}
+          {player && (
+            <Chapters chapters={chapters} current={chapterIdx} onSeek={seek} layout="chips" className="shrink-0 border-b border-border" />
+          )}
+          {mainTabs}
+        </div>
+      )}
+
+      <PrintView title={title} url={run?.url} markdown={markdown} />
     </div>
   );
 }

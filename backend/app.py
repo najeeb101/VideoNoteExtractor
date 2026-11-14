@@ -27,6 +27,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+from pipeline._llm import completion_kwargs
+from pipeline.study_pack import build_study_pack
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -40,6 +43,15 @@ STATIC_DIR   = REPO_ROOT / "static"
 
 FREE_TIER_LIMIT        = 3        # max runs per calendar month
 FREE_TIER_MAX_DURATION = 1200     # 20 minutes in seconds
+
+# Pipeline output file -> column in the Supabase `notes` table.
+NOTE_FILES = [
+    ("chunk_notes.md",             "chunk_notes_md"),
+    ("notes_reduced.md",           "reduced_notes_md"),
+    ("transcript.txt",             "transcript_txt"),
+    ("transcript_timestamped.txt", "transcript_timestamped_txt"),
+]
+MEDIA_FILES = ("audio.mp3", "video.mp4")
 
 DOWNLOAD_ALLOWLIST = {
     "chunk_notes.md",
@@ -109,14 +121,16 @@ def get_current_user_sse(token: str = Query(default=None)):
 # ── Free tier helpers ─────────────────────────────────────────────────────────
 
 def _count_runs_this_month(user_id: str) -> int:
+    # Counted from run_usage, not runs: users can delete runs, which would
+    # otherwise refund their quota.
     sb = _get_supabase()
     if not sb:
         return 0
     now = datetime.now(timezone.utc)
     start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     result = (
-        sb.table("runs")
-        .select("id", count="exact")
+        sb.table("run_usage")
+        .select("run_id", count="exact")
         .eq("user_id", user_id)
         .gte("created_at", start.isoformat())
         .execute()
@@ -191,10 +205,20 @@ def _read_subprocess_output(job: RunJob) -> None:
     finally:
         job.process.wait()
         job.exit_code = job.process.returncode
-        job.log_queue.put(None)  # sentinel
+        try:
+            # Persist before signalling: the client reloads the run list as soon
+            # as it sees "done", so the DB status must already be updated.
+            _on_pipeline_complete(job)
+        finally:
+            job.log_queue.put(None)  # sentinel
 
-        # Update run status + save notes to Supabase
-        _on_pipeline_complete(job)
+        # Pre-generate the study pack so the notes page has it on first open.
+        # Best effort: GET /api/study generates it lazily if this fails.
+        if job.exit_code == 0 and job.user_id:
+            try:
+                _ensure_study_pack(job.run_id)
+            except (Exception, SystemExit) as exc:
+                print(f"[study] pre-generation failed for {job.run_id}: {exc!r}")
 
 
 def _on_pipeline_complete(job: RunJob) -> None:
@@ -213,26 +237,22 @@ def _on_pipeline_complete(job: RunJob) -> None:
         return
 
     run_dir = OUTPUTS_DIR / job.run_id
-    note_data: dict = {}
-    for fname, key in [
-        ("chunk_notes.md",             "chunk_notes_md"),
-        ("notes_reduced.md",           "reduced_notes_md"),
-        ("transcript.txt",             "transcript_txt"),
-        ("transcript_timestamped.txt", "transcript_timestamped_txt"),
-    ]:
-        p = run_dir / fname
-        if p.exists():
-            note_data[key] = p.read_text(encoding="utf-8")
+    note_data = _read_note_files(run_dir)
+    if not note_data:
+        return
+    try:
+        sb.table("notes").insert({
+            "run_id":  job.run_id,
+            "user_id": job.user_id,
+            **note_data,
+        }).execute()
+    except Exception as exc:
+        print(f"[db] failed to save notes: {exc}")
+        return
 
-    if note_data:
-        try:
-            sb.table("notes").insert({
-                "run_id":  job.run_id,
-                "user_id": job.user_id,
-                **note_data,
-            }).execute()
-        except Exception as exc:
-            print(f"[db] failed to save notes: {exc}")
+    # Notes now live in Supabase; drop the downloaded media (tens of MB per run).
+    for fname in MEDIA_FILES:
+        (run_dir / fname).unlink(missing_ok=True)
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -289,6 +309,13 @@ async def list_models(user=Depends(get_current_user)):
     return {"models": models, "default": default}
 
 
+@app.get("/api/usage")
+async def usage(user=Depends(get_current_user)):
+    loop = asyncio.get_event_loop()
+    used = await loop.run_in_executor(None, _count_runs_this_month, user.id)
+    return {"used": used, "limit": FREE_TIER_LIMIT}
+
+
 @app.post("/api/run")
 async def start_run(body: RunRequest, user=Depends(get_current_user)):
     url = body.url.strip()
@@ -341,7 +368,12 @@ async def start_run(body: RunRequest, user=Depends(get_current_user)):
                 "duration_seconds": duration or None,
                 "expires_at":       expires,
             }).execute()
+            sb.table("run_usage").insert({"run_id": run_id, "user_id": user.id}).execute()
         except Exception as exc:
+            try:
+                sb.table("runs").delete().eq("id", run_id).execute()
+            except Exception:
+                pass
             raise HTTPException(500, f"Failed to create run record: {exc}")
 
     # Launch pipeline
@@ -450,33 +482,63 @@ def _safe_run_dir(run_id: str) -> Path:
     return candidate
 
 
-def _assert_run_owner(run_id: str, user_id: str) -> None:
+def _assert_run_owner(run_id: str, user_id: str) -> dict:
+    """Return the run row if `user_id` owns it; 404 if missing, 403 if not theirs."""
+    try:
+        uuid.UUID(run_id)
+    except ValueError:
+        raise HTTPException(404, "Run not found.")
     sb = _get_supabase()
     if not sb:
-        return
-    result = sb.table("runs").select("user_id").eq("id", run_id).single().execute()
-    if not result.data or result.data["user_id"] != user_id:
+        return {}
+    rows = sb.table("runs").select("*").eq("id", run_id).limit(1).execute().data
+    if not rows:
+        raise HTTPException(404, "Run not found.")
+    if rows[0]["user_id"] != user_id:
         raise HTTPException(403, "Access denied.")
+    return rows[0]
+
+
+def _read_note_files(run_dir: Path) -> dict:
+    return {
+        key: (run_dir / fname).read_text(encoding="utf-8")
+        for fname, key in NOTE_FILES
+        if (run_dir / fname).exists()
+    }
+
+
+def _load_notes(run_id: str) -> dict:
+    """Notes for a run, from the Supabase `notes` row: the backend's local disk
+    is ephemeral on hosts like Render. Falls back to the local output files when
+    there's no row (Supabase not configured, or the save failed)."""
+    sb = _get_supabase()
+    if sb:
+        rows = (
+            sb.table("notes")
+            .select(", ".join(key for _, key in NOTE_FILES))
+            .eq("run_id", run_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if rows:
+            return {k: v for k, v in rows[0].items() if v}
+    return _read_note_files(_safe_run_dir(run_id))
+
+
+@app.get("/api/runs/{run_id}")
+async def get_run(run_id: str, user=Depends(get_current_user)):
+    run = _assert_run_owner(run_id, user.id)
+    if not run:
+        raise HTTPException(404, "Run not found.")
+    return run
 
 
 @app.get("/api/notes/{run_id}")
 async def get_notes(run_id: str, user=Depends(get_current_user)):
     _assert_run_owner(run_id, user.id)
-    run_dir = _safe_run_dir(run_id)
-    if not run_dir.exists():
-        raise HTTPException(404, "Run directory not found.")
-
-    result: dict = {}
-    for fname, key in [
-        ("chunk_notes.md",             "chunk_notes_md"),
-        ("notes_reduced.md",           "reduced_notes_md"),
-        ("transcript.txt",             "transcript_txt"),
-        ("transcript_timestamped.txt", "transcript_timestamped_txt"),
-    ]:
-        p = run_dir / fname
-        if p.exists():
-            result[key] = p.read_text(encoding="utf-8")
-
+    result = _load_notes(run_id)
     if not result:
         raise HTTPException(404, "No notes generated yet.")
     return result
@@ -513,6 +575,168 @@ async def delete_run(run_id: str, user=Depends(get_current_user)):
     return {"ok": True}
 
 
+# ── Study pack ────────────────────────────────────────────────────────────────
+
+_study_locks: dict[str, threading.Lock] = {}
+_study_locks_guard = threading.Lock()
+
+
+def _latest_notes_row(run_id: str, columns: str) -> dict:
+    rows = (
+        _get_supabase().table("notes").select(columns).eq("run_id", run_id)
+        .order("created_at", desc=True).limit(1).execute().data
+    )
+    return rows[0] if rows else {}
+
+
+def _ensure_study_pack(run_id: str) -> dict | None:
+    """The run's cached study pack, generated and saved on first use.
+    A per-run lock keeps concurrent requests from generating it twice."""
+    with _study_locks_guard:
+        lock = _study_locks.setdefault(run_id, threading.Lock())
+    with lock:
+        sb = _get_supabase()
+        if sb:
+            cached = _latest_notes_row(run_id, "study_json").get("study_json")
+            if cached:
+                return cached
+        notes = _load_notes(run_id)
+        if not notes.get("chunk_notes_md") and not notes.get("reduced_notes_md"):
+            return None
+        pack = build_study_pack(notes.get("chunk_notes_md", ""), notes.get("reduced_notes_md", ""))
+        if sb:
+            sb.table("notes").update({"study_json": pack}).eq("run_id", run_id).execute()
+        return pack
+
+
+@app.get("/api/study/{run_id}")
+async def get_study_pack(run_id: str, user=Depends(get_current_user)):
+    _assert_run_owner(run_id, user.id)
+    loop = asyncio.get_event_loop()
+    try:
+        pack = await loop.run_in_executor(None, _ensure_study_pack, run_id)
+    except (Exception, SystemExit) as exc:  # LLM errors and rate limits; SystemExit = no API key
+        print(f"[study] {run_id}: {exc!r}")
+        raise HTTPException(503, "Couldn't generate study material right now. Try again in a minute.")
+    if pack is None:
+        raise HTTPException(404, "No notes available for this run.")
+    return pack
+
+
+# ── Personal notes & stars ────────────────────────────────────────────────────
+
+MY_NOTES_MAX_CHARS = 50_000
+MY_NOTES_MAX_STARS = 500
+
+
+class MyNotesUpdate(BaseModel):
+    body: str | None = None
+    starred: list[str] | None = None
+
+
+@app.get("/api/runs/{run_id}/my-notes")
+async def get_my_notes(run_id: str, user=Depends(get_current_user)):
+    _assert_run_owner(run_id, user.id)
+    rows = (
+        _get_supabase().table("user_notes").select("body, starred")
+        .eq("run_id", run_id).eq("user_id", user.id).limit(1).execute().data
+    )
+    return rows[0] if rows else {"body": "", "starred": []}
+
+
+@app.put("/api/runs/{run_id}/my-notes")
+async def put_my_notes(run_id: str, body: MyNotesUpdate, user=Depends(get_current_user)):
+    _assert_run_owner(run_id, user.id)
+    if body.body is not None and len(body.body) > MY_NOTES_MAX_CHARS:
+        raise HTTPException(413, f"Notes are limited to {MY_NOTES_MAX_CHARS:,} characters.")
+    if body.starred is not None and (
+        len(body.starred) > MY_NOTES_MAX_STARS or any(len(k) > 32 for k in body.starred)
+    ):
+        raise HTTPException(400, "Invalid starred list.")
+    sb = _get_supabase()
+    existing = (
+        sb.table("user_notes").select("body, starred")
+        .eq("run_id", run_id).eq("user_id", user.id).limit(1).execute().data
+    )
+    row = existing[0] if existing else {"body": "", "starred": []}
+    if body.body is not None:
+        row["body"] = body.body
+    if body.starred is not None:
+        row["starred"] = list(dict.fromkeys(body.starred))
+    sb.table("user_notes").upsert({
+        "run_id": run_id,
+        "user_id": user.id,
+        **row,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }, on_conflict="run_id,user_id").execute()
+    return row
+
+
+# ── Search ────────────────────────────────────────────────────────────────────
+
+@app.get("/api/search")
+async def search_notes(q: str = Query(default=""), user=Depends(get_current_user)):
+    q = q.strip()[:200]
+    if len(q) < 2:
+        return []
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None, lambda: _get_supabase().rpc("search_notes", {"uid": user.id, "q": q}).execute()
+    )
+    return result.data or []
+
+
+# ── Share links ───────────────────────────────────────────────────────────────
+
+@app.post("/api/runs/{run_id}/share")
+async def create_share_link(run_id: str, user=Depends(get_current_user)):
+    run = _assert_run_owner(run_id, user.id)
+    if run.get("status") != "done":
+        raise HTTPException(400, "Only finished videos can be shared.")
+    token = run.get("share_token")
+    if not token:
+        token = str(uuid.uuid4())
+        _get_supabase().table("runs").update({"share_token": token}).eq("id", run_id).execute()
+    return {"share_token": token}
+
+
+@app.delete("/api/runs/{run_id}/share")
+async def revoke_share_link(run_id: str, user=Depends(get_current_user)):
+    _assert_run_owner(run_id, user.id)
+    _get_supabase().table("runs").update({"share_token": None}).eq("id", run_id).execute()
+    return {"ok": True}
+
+
+@app.get("/api/share/{token}")
+async def get_shared_notes(token: str):
+    """Public, read-only notes for a share link. No auth; no transcript or user info."""
+    try:
+        uuid.UUID(token)
+    except ValueError:
+        raise HTTPException(404, "Link not found.")
+    sb = _get_supabase()
+    if not sb:
+        raise HTTPException(404, "Link not found.")
+    rows = (
+        sb.table("runs").select("id, title, url, duration_seconds")
+        .eq("share_token", token).eq("status", "done").limit(1).execute().data
+    )
+    if not rows:
+        raise HTTPException(404, "Link not found.")
+    run = rows[0]
+    notes = _latest_notes_row(run["id"], "reduced_notes_md, chunk_notes_md, study_json")
+    if not notes:
+        raise HTTPException(404, "Link not found.")
+    return {
+        "title": run["title"],
+        "url": run["url"],
+        "duration_seconds": run["duration_seconds"],
+        "reduced_notes_md": notes.get("reduced_notes_md") or "",
+        "chunk_notes_md": notes.get("chunk_notes_md") or "",
+        "study": notes.get("study_json"),
+    }
+
+
 # ── /api/chat/{run_id} ────────────────────────────────────────────────────────
 
 class ChatMessage(BaseModel):
@@ -526,7 +750,6 @@ class ChatRequest(BaseModel):
 @app.post("/api/chat/{run_id}")
 async def chat(run_id: str, body: ChatRequest, user=Depends(get_current_user)):
     _assert_run_owner(run_id, user.id)
-    run_dir = _safe_run_dir(run_id)
 
     use_ollama = os.environ.get("LLM_PROVIDER", "").lower() == "ollama"
     api_key = os.environ.get("GROQ_API_KEY")
@@ -535,15 +758,11 @@ async def chat(run_id: str, body: ChatRequest, user=Depends(get_current_user)):
 
     loop = asyncio.get_event_loop()
 
-    reduced_notes = ""
-    rn = run_dir / "notes_reduced.md"
-    if rn.exists():
-        reduced_notes = rn.read_text(encoding="utf-8")[:5_000]
-
-    cn = run_dir / "chunk_notes.md"
+    notes = _load_notes(run_id)
+    reduced_notes = notes.get("reduced_notes_md", "")[:5_000]
     # Local models have a much smaller context window than Groq's.
     chunk_limit = 24_000 if use_ollama else 80_000
-    chunk_notes = cn.read_text(encoding="utf-8")[:chunk_limit] if cn.exists() else ""
+    chunk_notes = notes.get("chunk_notes_md", "")[:chunk_limit]
     if not chunk_notes and not reduced_notes:
         raise HTTPException(404, "No notes available for this run.")
     context = f"DETAILED NOTES:\n{chunk_notes}\n\nOUTLINE:\n{reduced_notes}"
@@ -560,7 +779,7 @@ async def chat(run_id: str, body: ChatRequest, user=Depends(get_current_user)):
         # Larger-context variant of the pipeline model; see backend/ollama/Modelfile.chat
         model = os.environ.get("OLLAMA_CHAT_MODEL", "lectura-chat")
     else:
-        model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+        model = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
     token_q: asyncio.Queue = asyncio.Queue()
 
     def _stream():
@@ -584,6 +803,7 @@ async def chat(run_id: str, body: ChatRequest, user=Depends(get_current_user)):
                 messages=messages,
                 temperature=0.3,
                 stream=True,
+                **completion_kwargs(model),
             )
             for chunk in stream:
                 delta = chunk.choices[0].delta.content

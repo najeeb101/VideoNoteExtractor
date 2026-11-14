@@ -153,12 +153,14 @@ Transcript section:
 
 def _call_api(client: OpenAI, model: str, prompt: str, max_retries: int = 3) -> tuple[str, Any]:
     """Returns (response_text, usage). Raises on permanent failure."""
+    from _llm import completion_kwargs
     for attempt in range(max_retries):
         try:
             response = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,
+                **completion_kwargs(model),
             )
             text = response.choices[0].message.content or ""
             # Small local models occasionally ignore the bullet format; retry once.

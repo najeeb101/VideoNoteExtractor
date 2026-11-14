@@ -19,6 +19,18 @@ OLLAMA_BASE_URL = "http://localhost:11434/v1"
 OLLAMA_DEFAULT_MODEL = "lectura-notes"
 
 
+def completion_kwargs(model: str) -> dict:
+    """Extra chat.completions.create() args for the given model.
+
+    gpt-oss is a reasoning model: with default settings it can spend its whole
+    output budget on hidden reasoning and return empty content
+    (finish_reason=length). Low effort plus an explicit budget avoids that.
+    """
+    if "gpt-oss" in model:
+        return {"reasoning_effort": "low", "max_completion_tokens": 16384}
+    return {}
+
+
 def make_client_and_model():
     """Return (client, model). Exits with a clear message if no key is configured."""
     try:
@@ -47,7 +59,7 @@ def make_client_and_model():
 
     groq_key = os.environ.get("GROQ_API_KEY")
     if groq_key:
-        model = model or os.environ.get("GROQ_MODEL") or "llama-3.3-70b-versatile"
+        model = model or os.environ.get("GROQ_MODEL") or "openai/gpt-oss-120b"
         client = OpenAI(api_key=groq_key, base_url=base_url or GROQ_BASE_URL)
         print(f"[*] LLM: Groq ({model})")
         return client, model

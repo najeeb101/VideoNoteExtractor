@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository layout
 
-This is a two-part monorepo. Product name in the UI/API is **Lectura**; the repo/CLI name is **VideoNoteExtractor**. LLM providers: the backend chat always uses **Groq** (`llama-3.3-70b-versatile`); the pipeline uses **OpenAI** if `OPENAI_API_KEY` is set, otherwise it **falls back to Groq** automatically (`backend/pipeline/_llm.py`). Running everything on a single Groq key requires no OpenAI account.
+This is a two-part monorepo. Product name in the UI/API is **Lectura**; the repo/CLI name is **VideoNoteExtractor**. LLM providers: the backend chat always uses **Groq** (`openai/gpt-oss-120b`); the pipeline uses **OpenAI** if `OPENAI_API_KEY` is set, otherwise it **falls back to Groq** automatically (`backend/pipeline/_llm.py`). Running everything on a single Groq key requires no OpenAI account.
 
 - **`backend/`** — Python. `app.py` (FastAPI server) + `pipeline/` (the note-extraction steps). Local pipeline outputs land in `backend/outputs/{run-id}/`.
 - **`frontend/`** — Next.js 16 (App Router, React 19, Tailwind v4, shadcn) + Supabase auth. Talks to the backend over HTTP/SSE.
@@ -75,7 +75,7 @@ Copy `.env.example` to `.env` (repo root). **Two different LLM providers are use
 | Variable | Used by | Purpose |
 |---|---|---|
 | `GROQ_API_KEY` | backend `/api/chat` + pipeline fallback | Groq chat completions (OpenAI-compatible SDK) |
-| `GROQ_MODEL` | Groq calls | default `llama-3.3-70b-versatile` |
+| `GROQ_MODEL` | Groq calls | default `openai/gpt-oss-120b` |
 | `LLM_PROVIDER` | pipeline + chat | `ollama` = local models (see above); unset = OpenAI/Groq |
 | `OPENAI_API_KEY` | pipeline (`summarize_chunks`, `reduce_notes`, `extract_notes`) | optional; used if set, else Groq fallback |
 | `OPENAI_MODEL` | pipeline | default `gpt-4o-mini` |
@@ -106,6 +106,8 @@ YouTube URL / local video
 
 `extract_notes.py` is an alternate one-shot path: timestamped transcript → single structured `notes.md`, not part of `run_pipeline.py`'s default flow.
 
+`study_pack.py` is not part of `run_pipeline.py` either. The backend calls `build_study_pack()` after a run (and lazily from `GET /api/study`). It makes one JSON-mode LLM call returning a TL;DR, a title per chunk part (chapters), key terms, flashcards and a quiz, validated with pydantic, and the result is cached in `notes.study_json`. It sends only the chunk notes: adding the outline overflowed Groq's free tier (8k tokens/minute per request).
+
 - **`summarize_chunks.py`** — sequential mode (default) passes the last 30 bullets as `recent_bullets` context to reduce cross-chunk repetition; parallel mode (`SUMMARIZE_WORKERS>1`, `ThreadPoolExecutor`) drops that context.
 - **`reduce_notes.py`** — map-reduce: batch bullets by `REDUCE_BATCH_CHARS`, condense each batch (map), merge partials in a final call (reduce).
 
@@ -114,13 +116,22 @@ YouTube URL / local video
 FastAPI, thread-per-job model. `/api/run` spawns `run_pipeline.py` as a subprocess (always with `--no-visual`); `_read_subprocess_output` runs in a daemon thread parsing stdout into a `queue.Queue`; the SSE endpoint `/api/stream/{run_id}` drains it via `run_in_executor`. Step progress is inferred by matching `$ …` log lines against `STEP_PATTERNS`.
 
 - **Auth**: every endpoint depends on a Supabase JWT — `Authorization: Bearer` header for normal calls, `?token=` query param for SSE (`EventSource` can't set headers).
-- **Free tier**: `FREE_TIER_LIMIT` runs/calendar-month and `FREE_TIER_MAX_DURATION` (20 min, checked via a yt-dlp metadata probe) enforced in `/api/run`. Concurrent runs by the same user are rejected (HTTP 409).
-- **Persistence**: on completion, `_on_pipeline_complete` updates the `runs` row and inserts generated notes into the `notes` table.
-- **Chat** (`/api/chat/{run_id}`): stuffs `chunk_notes.md` (≤80k chars) + `notes_reduced.md` (≤5k) into the system prompt and streams a Groq answer. (No embeddings/RAG — Groq has no embeddings API, and a ≤20-min free-tier video's notes fit comfortably in context.)
+- **Free tier**: `FREE_TIER_LIMIT` runs/calendar-month and `FREE_TIER_MAX_DURATION` (20 min, checked via a yt-dlp metadata probe) enforced in `/api/run`. Concurrent runs by the same user are rejected (HTTP 409). Usage is counted from the `run_usage` table (service-role only, no RLS policies), not `runs`: users can delete their own `runs` rows, which would refund quota. `GET /api/usage` feeds the dashboard's usage bar.
+- **Persistence**: on completion, `_on_pipeline_complete` updates the `runs` row, inserts generated notes into the `notes` table, then deletes the run's `audio.mp3`/`video.mp4`. The Supabase `notes` row is the source of truth: `/api/notes` and chat read it via `_load_notes` (local files are only a fallback), because the backend's disk is ephemeral on Render. Notes are kept until the user deletes the run; `runs.expires_at` is not enforced.
+- **Chat** (`/api/chat/{run_id}`): stuffs the run's chunk notes (≤80k chars) + reduced notes (≤5k) into the system prompt and streams a Groq answer. (No embeddings/RAG — Groq has no embeddings API, and a ≤20-min free-tier video's notes fit comfortably in context.)
+- **Study & personal data**:
+  - `GET /api/study/{id}`: the study pack, generated once under a per-run lock.
+  - `GET`/`PUT /api/runs/{id}/my-notes`: personal notes and starred bullet keys, in the `user_notes` table.
+  - `GET /api/search?q=`: calls the `search_notes` Postgres function (full text over `notes.search_tsv`).
+  - `POST`/`DELETE /api/runs/{id}/share`: sets `runs.share_token`.
+  - `GET /api/share/{token}` is the only unauthenticated endpoint. It returns notes and study pack, never the transcript or user data.
+  - `user_notes`, `run_usage` and `search_notes` are service-role only: no RLS policies or execute grants.
 - **Safety**: `_safe_run_dir` validates run dirs stay under `outputs/`; downloads gated to `DOWNLOAD_ALLOWLIST`; `_assert_run_owner` checks ownership against Supabase.
 
-`app.py` invokes `run_pipeline.py` with `--run-id <uuid>` and `cwd=backend/`, so outputs land in `backend/outputs/{uuid}/` — the same `OUTPUTS_DIR` the server reads notes back from. The subprocess's stdout markers (`[OK] Pre-flight checks passed`, `$ …` step lines, `[OK] Pipeline complete.`) are what `STEP_PATTERNS` keys progress off of, so keep those strings in sync if you touch either side.
+`app.py` invokes `run_pipeline.py` with `--run-id <uuid>` and `cwd=backend/`, so outputs land in `backend/outputs/{uuid}/` (`OUTPUTS_DIR`), where `_on_pipeline_complete` picks them up. The subprocess's stdout markers (`[OK] Pre-flight checks passed`, `$ …` step lines, `[OK] Pipeline complete.`) are what `STEP_PATTERNS` keys progress off of, so keep those strings in sync if you touch either side.
 
 ### Frontend (`frontend/src/`)
 
-Next.js App Router. Route groups `(auth)` (login) and `(dashboard)` (dashboard, `run/[id]`, settings). All backend calls go through the typed `api` object in `lib/api.ts` (fetch + SSE `EventSource`). Supabase clients are split browser (`lib/supabase/client.ts`) / server (`server.ts`) / middleware (`middleware.ts`); session refresh runs in `proxy.ts`. UI is shadcn components under `components/ui/`.
+Next.js App Router. Route groups `(auth)` (login) and `(dashboard)` (dashboard, `run/[id]`, settings). All backend calls go through the typed `api` object in `lib/api.ts` (fetch + SSE `EventSource`). Supabase clients are split browser (`lib/supabase/client.ts`) / server (`server.ts`) / middleware (`middleware.ts`); session refresh runs in `proxy.ts`. UI is shadcn components under `components/ui/` (Base UI primitives: active tabs use `data-active`, not Radix's `data-state`).
+
+The run page (`run/[id]`) composes `components/run/*`: an embedded YouTube player (`youtube-player.tsx`, IFrame API) whose `seekTo` is passed as `onSeek` to `components/markdown.tsx`, so `[HH:MM:SS]` chips seek the player (modified clicks still open YouTube). Chapters come from the chunk-note headings (`lib/notes.ts`). Chat sits under the player on desktop and in a tab on mobile (`lib/use-media-query.ts`), so only one `ChatPanel` is ever mounted. Printing uses `print-view.tsx`, a portal into `<body>`.

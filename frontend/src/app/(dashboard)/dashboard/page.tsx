@@ -2,18 +2,17 @@
 
 import { useState, useEffect, useRef } from "react";
 import { Plus, Video, Clock, Trash2, ChevronRight, Loader2, AlertCircle, FileText } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { createClient } from "@/lib/supabase/client";
 import { PENDING_URL_KEY } from "@/components/hero-url-form";
+import { NotesSearch } from "@/components/dashboard/notes-search";
 import { api, type Run } from "@/lib/api";
 import Link from "next/link";
-import { formatDistanceToNow, differenceInDays } from "date-fns";
-
-// Keep in sync with FREE_TIER_LIMIT in backend/app.py.
-const FREE_LIMIT = 3;
+import { formatDistanceToNow } from "date-fns";
+import { cn } from "@/lib/utils";
 
 function statusColor(status: Run["status"]) {
   return {
@@ -44,6 +43,7 @@ function formatDuration(s: number | null) {
 
 export default function DashboardPage() {
   const [runs, setRuns] = useState<Run[]>([]);
+  const [usage, setUsage] = useState<{ used: number; limit: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [url, setUrl] = useState("");
@@ -51,10 +51,12 @@ export default function DashboardPage() {
   const [model, setModel] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [finishedRunId, setFinishedRunId] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [progress, setProgress] = useState(0);
   const [runError, setRunError] = useState<string | null>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const streamRef = useRef<EventSource | null>(null);
   const supabase = createClient();
 
   async function getToken() {
@@ -64,19 +66,16 @@ export default function DashboardPage() {
 
   async function loadRuns() {
     const token = await getToken();
-    try {
-      const data = await api.runs.list(token);
-      setRuns(data);
-    } catch {}
+    const [runsRes, usageRes] = await Promise.allSettled([api.runs.list(token), api.usage(token)]);
+    if (runsRes.status === "fulfilled") setRuns(runsRes.value);
+    if (usageRes.status === "fulfilled") setUsage(usageRes.value);
     setLoading(false);
   }
 
   useEffect(() => {
     async function load() {
       const token = await getToken();
-      try {
-        setRuns(await api.runs.list(token));
-      } catch {}
+      await loadRuns();
       try {
         const pending = sessionStorage.getItem(PENDING_URL_KEY);
         if (pending) {
@@ -97,8 +96,32 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    logsEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [logs]);
+
+  // Keep statuses fresh while anything is still processing (e.g. after a reload,
+  // when there's no live progress stream for that run).
+  const hasPending = runs.some((r) => r.status === "processing" || r.status === "queued");
+  useEffect(() => {
+    if (!hasPending) return;
+    const timer = setInterval(loadRuns, 5000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasPending]);
+
+  // Stop listening to the progress stream if the page unmounts mid-run.
+  useEffect(() => () => streamRef.current?.close(), []);
+
+  function closeModal() {
+    streamRef.current?.close();
+    streamRef.current = null;
+    setShowModal(false);
+    setLogs([]);
+    setProgress(0);
+    setRunError(null);
+    setActiveRunId(null);
+    setFinishedRunId(null);
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -113,8 +136,10 @@ export default function DashboardPage() {
       const { run_id } = await api.runs.create(token, url.trim(), model || undefined);
       setActiveRunId(run_id);
       setUrl("");
+      loadRuns();
 
       const es = api.stream(run_id, token);
+      streamRef.current = es;
 
       // Backend streams JSON envelopes: {type: "log"|"step"|"done"|"error"|"ping", ...}
       es.onmessage = (ev) => {
@@ -139,10 +164,11 @@ export default function DashboardPage() {
             setProgress(100);
             es.close();
             loadRuns();
+            setFinishedRunId(run_id);
             setActiveRunId(null);
             break;
           case "error":
-            setRunError("Pipeline failed — check the logs above.");
+            setRunError("Processing failed. Check that the video is public and under 20 minutes, then try again.");
             es.close();
             setActiveRunId(null);
             loadRuns();
@@ -152,6 +178,7 @@ export default function DashboardPage() {
       };
       es.onerror = () => {
         es.close();
+        setRunError("Lost the live progress connection. The video is still processing; its status will update in the list.");
         setActiveRunId(null);
         loadRuns();
       };
@@ -170,41 +197,40 @@ export default function DashboardPage() {
     } catch {}
   }
 
-  const freeUsed = runs.filter((r) => {
-    const d = new Date(r.created_at);
-    const now = new Date();
-    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-  }).length;
+  // Server-side count: deleting a video doesn't give the run back.
+  const limitReached = usage ? usage.used >= usage.limit : false;
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-8">
+    <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-8">
       {/* Header */}
-      <div className="mb-8 flex items-center justify-between">
+      <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Your Videos</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Turn any YouTube lecture into searchable notes.
           </p>
         </div>
-        <Button onClick={() => setShowModal(true)} disabled={freeUsed >= FREE_LIMIT} className="gap-2">
+        <Button onClick={() => setShowModal(true)} disabled={limitReached} className="gap-2 self-start sm:self-auto">
           <Plus className="h-4 w-4" />
           New video
         </Button>
       </div>
 
       {/* Free tier bar */}
-      <div className="mb-8 rounded-lg border border-border bg-card p-4">
-        <div className="mb-2 flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">Free tier usage</span>
-          <span className="font-medium">{freeUsed} / {FREE_LIMIT} videos this month</span>
+      {usage && (
+        <div className="mb-8 rounded-lg border border-border bg-card p-4">
+          <div className="mb-2 flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Free tier usage</span>
+            <span className="font-medium">{usage.used} / {usage.limit} videos this month</span>
+          </div>
+          <Progress value={Math.min(usage.used / usage.limit, 1) * 100} className="h-1.5" />
+          {limitReached && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              You&apos;ve used all {usage.limit} free videos this month. Upgrade to Pro for unlimited access.
+            </p>
+          )}
         </div>
-        <Progress value={(freeUsed / FREE_LIMIT) * 100} className="h-1.5" />
-        {freeUsed >= FREE_LIMIT && (
-          <p className="mt-2 text-xs text-muted-foreground">
-            You&apos;ve used all {FREE_LIMIT} free videos this month. Upgrade to Pro for unlimited access.
-          </p>
-        )}
-      </div>
+      )}
 
       {/* Runs list */}
       {loading ? (
@@ -223,43 +249,44 @@ export default function DashboardPage() {
           </Button>
         </div>
       ) : (
+        <NotesSearch>
         <div className="space-y-2">
           {runs.map((run) => {
-            const daysLeft = differenceInDays(new Date(run.expires_at), new Date());
             return (
-              <div key={run.id} className="group flex items-center gap-4 rounded-lg border border-border bg-card px-4 py-3 hover:border-primary/20 transition-colors">
+              <div key={run.id} className="group flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-3 hover:border-primary/20 transition-colors sm:gap-4 sm:px-4">
                 {run.thumbnail_url ? (
                   // eslint-disable-next-line @next/next/no-img-element -- remote YouTube thumbnail; next/image would need remotePatterns config
-                  <img src={run.thumbnail_url} alt="" className="h-12 w-20 shrink-0 rounded object-cover" />
+                  <img src={run.thumbnail_url} alt="" className="hidden h-12 w-20 shrink-0 rounded object-cover sm:block" />
                 ) : (
-                  <div className="flex h-12 w-20 shrink-0 items-center justify-center rounded bg-muted">
+                  <div className="hidden h-12 w-20 shrink-0 items-center justify-center rounded bg-muted sm:flex">
                     <Video className="h-5 w-5 text-muted-foreground" />
                   </div>
                 )}
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{run.title || run.url}</p>
-                  <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
+                  {run.status === "done" ? (
+                    <Link href={`/run/${run.id}`} className="block truncate text-sm font-medium hover:text-primary transition-colors">
+                      {run.title || run.url}
+                    </Link>
+                  ) : (
+                    <p className="truncate text-sm font-medium">{run.title || run.url}</p>
+                  )}
+                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
                     <span className="flex items-center gap-1">
                       <Clock className="h-3 w-3" />
                       {formatDuration(run.duration_seconds)}
                     </span>
                     <span>{formatDistanceToNow(new Date(run.created_at), { addSuffix: true })}</span>
-                    {run.status === "done" && daysLeft >= 0 && (
-                      <span className={daysLeft <= 1 ? "text-red-500" : ""}>
-                        expires in {daysLeft}d
-                      </span>
-                    )}
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(run.status)} ${run.status === "processing" ? "animate-pulse" : ""}`}>
-                    {run.status}
-                  </span>
+                <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+                  {run.status !== "done" && (
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(run.status)} ${run.status === "processing" ? "animate-pulse" : ""}`}>
+                      {run.status}
+                    </span>
+                  )}
                   {run.status === "done" && (
-                    <Link href={`/run/${run.id}`}>
-                      <Button size="sm" variant="ghost" className="gap-1 text-primary">
-                        Open <ChevronRight className="h-3 w-3" />
-                      </Button>
+                    <Link href={`/run/${run.id}`} className={cn(buttonVariants({ size: "sm", variant: "ghost" }), "gap-1 text-primary")}>
+                      Open <ChevronRight className="h-3 w-3" />
                     </Link>
                   )}
                   <button
@@ -276,10 +303,11 @@ export default function DashboardPage() {
             );
           })}
         </div>
+        </NotesSearch>
       )}
 
       {/* New run modal */}
-      <Dialog open={showModal} onOpenChange={(v) => { setShowModal(v); if (!v) { setLogs([]); setProgress(0); setRunError(null); setActiveRunId(null); } }}>
+      <Dialog open={showModal} onOpenChange={(v) => (v ? setShowModal(true) : closeModal())}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Process a new video</DialogTitle>
@@ -321,7 +349,7 @@ export default function DashboardPage() {
                 </div>
               )}
               <div className="flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={() => setShowModal(false)}>Cancel</Button>
+                <Button type="button" variant="outline" onClick={closeModal}>Cancel</Button>
                 <Button type="submit" disabled={submitting} className="gap-2">
                   {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
                   {submitting ? "Starting…" : "Process video"}
@@ -342,7 +370,14 @@ export default function DashboardPage() {
                 <div ref={logsEndRef} />
               </div>
               {progress === 100 && (
-                <Button className="w-full" onClick={() => setShowModal(false)}>Done — view in dashboard</Button>
+                <div className="flex gap-2">
+                  <Button variant="outline" className="flex-1" onClick={closeModal}>Close</Button>
+                  {finishedRunId && (
+                    <Link href={`/run/${finishedRunId}`} onClick={closeModal} className={cn(buttonVariants(), "flex-1")}>
+                      Open notes
+                    </Link>
+                  )}
+                </div>
               )}
             </div>
           )}

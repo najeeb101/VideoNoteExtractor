@@ -6,6 +6,7 @@ import {
 import { buttonVariants } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { HeroUrlForm } from "@/components/hero-url-form";
+import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 
 const SAMPLE_NOTES = [
@@ -45,7 +46,10 @@ function Eyebrow({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function LandingPage() {
+export default async function LandingPage() {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+
   return (
     <div className="min-h-screen overflow-x-clip bg-background text-foreground selection:bg-primary/20">
       {/* Floating nav */}
@@ -62,7 +66,9 @@ export default function LandingPage() {
             <a href="#features" className="hidden rounded-full px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground sm:block">Features</a>
             <a href="#pricing" className="hidden rounded-full px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground sm:block">Pricing</a>
             <ThemeToggle />
-            <Link href="/login" className={cn(buttonVariants({ size: "sm" }), "rounded-full px-4")}>Sign in</Link>
+            <Link href={user ? "/dashboard" : "/login"} className={cn(buttonVariants({ size: "sm" }), "rounded-full px-4")}>
+              {user ? "Dashboard" : "Sign in"}
+            </Link>
           </nav>
         </div>
       </header>
@@ -226,12 +232,12 @@ export default function LandingPage() {
           <div className="grid gap-5 sm:grid-cols-2">
             <PlanCard
               name="Free" price="$0" blurb="Perfect for trying it out."
-              features={["3 videos per month", "Up to 20 min per video", "Notes kept for 7 days", "Markdown export", "Chat with your notes"]}
+              features={["3 videos per month", "Up to 20 min per video", "Notes kept until you delete them", "Share links", "Markdown export", "Chat with your notes"]}
               action={<Link href="/login" className={cn(buttonVariants({ variant: "outline" }), "h-10 w-full rounded-full")}>Get started free</Link>}
             />
             <PlanCard
               name="Pro" price="$9" blurb="For serious learners." highlight
-              features={["Unlimited videos", "Up to 2 hours per video", "Notes kept forever", "Public share links", "Priority processing", "Everything in Free"]}
+              features={["Unlimited videos", "Up to 2 hours per video", "Priority processing", "Everything in Free"]}
               action={<span className={cn(buttonVariants(), "pointer-events-none h-10 w-full rounded-full opacity-50")}>Coming soon</span>}
             />
           </div>
@@ -266,7 +272,7 @@ export default function LandingPage() {
           <div className="flex items-center gap-5">
             <a href="#how-it-works" className="transition-colors hover:text-foreground">How it works</a>
             <a href="#pricing" className="transition-colors hover:text-foreground">Pricing</a>
-            <Link href="/login" className="transition-colors hover:text-foreground">Sign in</Link>
+            <Link href={user ? "/dashboard" : "/login"} className="transition-colors hover:text-foreground">{user ? "Dashboard" : "Sign in"}</Link>
             <span>© {new Date().getFullYear()}</span>
           </div>
         </div>
