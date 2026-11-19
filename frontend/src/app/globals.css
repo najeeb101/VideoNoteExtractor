@@ -160,6 +160,14 @@
   backdrop-filter: blur(14px) saturate(1.4);
 }
 
+/* ── Printing notes (see components/run/print-view.tsx) ───────────────── */
+@media print {
+  @page { margin: 16mm; }
+  body > :not(.print-root) { display: none !important; }
+  html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
+  .print-root, .print-root * { color: #000 !important; background: transparent !important; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-up, .animate-float-slow, .text-gradient-primary { animation: none !important; }
 }

@@ -84,12 +84,19 @@ def _pack_batches(lines: Iterable[str], max_chars: int) -> List[str]:
 
 
 def _chat(client: OpenAI, model: str, user_prompt: str) -> str:
+    from _llm import completion_kwargs
     resp = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": user_prompt}],
         temperature=0.2,
+        **completion_kwargs(model),
     )
-    return resp.choices[0].message.content or ""
+    choice = resp.choices[0]
+    text = (choice.message.content or "").strip()
+    if not text:
+        # Fail the run rather than feed an empty outline into the next call.
+        raise RuntimeError(f"LLM returned no content (finish_reason={choice.finish_reason}).")
+    return text
 
 
 def reduce_notes(input_path: str = "chunk_notes.md", output_path: str = "notes_reduced.md") -> str:
@@ -131,8 +138,9 @@ Output rules:
 - No boilerplate, no intro/outro, no "this summary..." lines.
 - Keep bullets concrete; bold key terms like **this**.
 - Preserve important examples as bullets under the relevant section.
-- Each input bullet ends with a [HH:MM:SS] timestamp. KEEP it at the end of the merged bullet
-  (when merging bullets, keep the earliest timestamp).
+- End every bullet with exactly one timestamp in square brackets, like: ... text [00:01:23]
+  Take it from the input bullets; when several bullets merge into one, use the earliest.
+  Never wrap a timestamp in parentheses and never write the word "timestamp".
 - Use ONLY information present in the bullets. Do not add facts, causes, or filler.
 
 Bullet points to consolidate:
@@ -155,6 +163,7 @@ Output rules:
 - Deduplicate aggressively and remove any repeated or near-duplicate points.
 - No boilerplate, no intro/outro, no separators.
 - Keep the [HH:MM:SS] timestamp at the end of every bullet that has one; never remove or invent timestamps.
+- Write timestamps only as [HH:MM:SS] (no parentheses, never the word "timestamp").
 - Use ONLY information present in the partial outlines. Do not add new facts.
 
 Partial outlines:

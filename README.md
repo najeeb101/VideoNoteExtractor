@@ -20,7 +20,7 @@ supabase/schema.sql Postgres schema, RLS policies, storage bucket
 
 ## LLM providers
 
-- **Groq** — the backend `/api/chat` endpoint (OpenAI-compatible), and the default for the pipeline too. Default model `llama-3.3-70b-versatile`.
+- **Groq** — the backend `/api/chat` endpoint (OpenAI-compatible), and the default for the pipeline too. Default model `openai/gpt-oss-120b`.
 - **OpenAI** — optional. If `OPENAI_API_KEY` is set, the pipeline uses it for note generation (`summarize`, `reduce`, `extract`) instead of Groq. Default `gpt-4o-mini`.
 
 You can run the entire app on a single Groq key — no OpenAI account required.

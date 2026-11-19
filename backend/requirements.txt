@@ -9,7 +9,7 @@ fastapi
 uvicorn[standard]
 python-multipart
 numpy
-supabase
+supabase>=2.32.0  # older versions reject sb_secret_ keys
 
 # Optional: GPU transcription (faster-whisper on CUDA 12). Skip to run on CPU.
 nvidia-cublas-cu12; sys_platform != "darwin"

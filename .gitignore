@@ -16,3 +16,7 @@ transcript*.txt
 chunk_notes.md
 notes_reduced.md
 notes.md
+
+# Local pipeline run outputs
+backend/outputs/
+outputs/
